@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or 'JStory' }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-50 text-gray-900">
+    <script>
+      // If page is restored from bfcache (back button), force reload to re-evaluate auth
+      window.addEventListener('pageshow', function (e) {
+        if (e.persisted) {
+          window.location.reload();
+        }
+      });
+    </script>
+    {% if not hide_top_nav %}
+    <nav class="bg-white border-b">
+      <div class="max-w-3xl mx-auto px-4 py-3 flex justify-between">
+  <a href="{{ url_for('dashboard') }}" class="font-semibold">JStory</a>
+        <div class="space-x-3">
+          <a href="{{ url_for('login_get') }}" class="text-sm text-gray-600 hover:text-gray-900">로그인</a>
+          <a href="{{ url_for('register_get') }}" class="text-sm text-gray-600 hover:text-gray-900">회원가입</a>
+        </div>
+      </div>
+    </nav>
+    {% endif %}
+    <main class="max-w-4xl mx-auto px-4 py-8">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="space-y-2 mb-6">
+            {% for category, message in messages %}
+              <div class="p-3 rounded border {{ 'border-green-300 bg-green-50 text-green-800' if category=='success' else 'border-red-300 bg-red-50 text-red-800' }}">
+                {{ message }}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

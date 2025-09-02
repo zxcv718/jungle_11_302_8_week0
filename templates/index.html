@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1 class="text-xl font-semibold mb-4">URL 미리보기 테스트</h1>
+<form action="{{ url_for('preview') }}" method="post" class="space-y-4">
+  <div>
+    <label class="block text-sm">URL</label>
+    <input type="url" name="url" required class="w-full border rounded px-3 py-2" placeholder="https://example.com" />
+  </div>
+  <button class="bg-emerald-600 text-white py-2 px-4 rounded">미리보기</button>
+</form>
+{% endblock %}

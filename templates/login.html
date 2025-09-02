@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="max-w-xl mx-auto">
+<h1 class="text-xl font-semibold mb-4">로그인</h1>
+<form action="{{ url_for('login_post') }}" method="post" class="space-y-4">
+  <div>
+    <label class="block text-sm">이메일</label>
+    <input type="email" name="email" required class="w-full border rounded px-3 py-2" />
+  </div>
+  <div>
+    <label class="block text-sm">비밀번호</label>
+    <input type="password" name="password" required class="w-full border rounded px-3 py-2" />
+  </div>
+  <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded">로그인</button>
+</form>
+<p class="mt-4 text-sm">계정이 없나요? <a href="{{ url_for('register_get') }}" class="text-blue-600">회원가입</a></p>
+</div>
+{% endblock %}

@@ -1,0 +1,140 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1 class="text-xl font-semibold mb-4">새 글 작성</h1>
+<form id="postForm" action="{{ url_for('post_new_post') }}" method="post" class="space-y-4">
+  <div>
+    <label class="block text-sm">카테고리</label>
+    <select id="category" name="category" required class="w-full border rounded px-3 py-2">
+      <option value="선택">선택</option>
+      {% for c in categories %}
+      <option value="{{ c }}">{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-sm">제목</label>
+    <input id="title" type="text" name="title" required maxlength="150" class="w-full border rounded px-3 py-2" />
+  </div>
+  <div>
+    <label class="block text-sm">URL(필수)</label>
+    <div class="relative">
+      <input id="url" type="url" name="url" required class="w-full border rounded px-3 py-2 pr-28" placeholder="https://example.com/article" />
+      <span id="urlStatus" class="absolute right-2 top-2 text-xs"></span>
+    </div>
+  </div>
+  <div>
+    <label class="block text-sm">내용</label>
+    <textarea id="contents" name="contents" rows="6" required class="w-full border rounded px-3 py-2"></textarea>
+  </div>
+  <div class="flex gap-2">
+    <a href="{{ url_for('dashboard') }}" class="flex-1 bg-gray-200 text-gray-800 py-2 rounded text-center">취소</a>
+    <button id="submitBtn" class="flex-1 bg-emerald-600 text-white py-2 rounded opacity-50 cursor-not-allowed" disabled>등록</button>
+  </div>
+</form>
+<script>
+  const form = document.getElementById('postForm');
+  const cat = document.getElementById('category');
+  const titleEl = document.getElementById('title');
+  const urlEl = document.getElementById('url');
+  const contentsEl = document.getElementById('contents');
+  const submitBtn = document.getElementById('submitBtn');
+  const urlStatus = document.getElementById('urlStatus');
+
+  let urlOk = false;
+  function setSubmitState() {
+    const allOk = (
+      cat.value && cat.value !== '선택' &&
+      titleEl.value.trim().length > 0 &&
+      contentsEl.value.trim().length > 0 &&
+      urlOk
+    );
+    submitBtn.disabled = !allOk;
+    submitBtn.className = 'flex-1 bg-emerald-600 text-white py-2 rounded ' + (allOk ? '' : 'opacity-50 cursor-not-allowed');
+  }
+
+  function isLikelyUrl(v) {
+    try {
+      const u = new URL(v);
+      return ['http:', 'https:'].includes(u.protocol);
+    } catch { return false; }
+  }
+
+  async function checkUrl(v) {
+    if (!v) {
+      urlOk = false;
+      urlStatus.textContent = '';
+      urlStatus.className = 'absolute right-2 top-2 text-xs';
+      setSubmitState();
+      return;
+    }
+    if (!isLikelyUrl(v)) {
+      urlOk = false;
+      urlStatus.textContent = '유효하지 않은 URL';
+      urlStatus.className = 'absolute right-2 top-2 text-xs text-red-600';
+      setSubmitState();
+      return;
+    }
+    urlStatus.textContent = '확인 중...';
+    urlStatus.className = 'absolute right-2 top-2 text-xs text-gray-600';
+    try {
+      const res = await fetchWithAutoRefresh(`{{ url_for('api_preview_url') }}?url=${encodeURIComponent(v)}`, { credentials: 'same-origin' });
+      const data = await res.json();
+      if (res.ok && data && data.ok) {
+        urlOk = true;
+        urlStatus.innerHTML = '<span class="text-green-600">등록 가능</span>';
+        urlStatus.className = 'absolute right-2 top-2 text-xs';
+      } else {
+        urlOk = false;
+        urlStatus.textContent = '유효하지 않은 URL';
+        urlStatus.className = 'absolute right-2 top-2 text-xs text-red-600';
+      }
+    } catch (e) {
+      urlOk = false;
+      urlStatus.textContent = '유효하지 않은 URL';
+      urlStatus.className = 'absolute right-2 top-2 text-xs text-red-600';
+    }
+    setSubmitState();
+  }
+
+  async function fetchWithAutoRefresh(input, init={}) {
+    let res = await fetch(input, { ...init, credentials: 'same-origin' });
+    if (res.status === 401) {
+      const r = await fetch(`{{ url_for('refresh') }}`, { method: 'POST', credentials: 'same-origin' });
+      if (r.ok) {
+        res = await fetch(input, { ...init, credentials: 'same-origin' });
+      } else {
+        try {
+          const j = await r.json();
+          if (j && j.error === 'unauthorized') {
+            alert('세션이 만료되었습니다. 다시 로그인해주세요.');
+            window.location.href = `{{ url_for('login_get') }}`;
+          }
+        } catch {}
+        throw new Error('unauthorized');
+      }
+    }
+    return res;
+  }
+
+  // live validation
+  let t;
+  urlEl.addEventListener('input', () => {
+    clearTimeout(t);
+    const v = urlEl.value.trim();
+    t = setTimeout(() => checkUrl(v), 400);
+  });
+  cat.addEventListener('change', setSubmitState);
+  titleEl.addEventListener('input', setSubmitState);
+  contentsEl.addEventListener('input', setSubmitState);
+
+  // prevent submit if invalid (e.g., Enter key)
+  form.addEventListener('submit', (e) => {
+    if (submitBtn.disabled) {
+      e.preventDefault();
+      setSubmitState();
+    }
+  });
+
+  setSubmitState();
+</script>
+{% endblock %}

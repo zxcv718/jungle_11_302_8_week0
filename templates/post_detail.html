@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block content %}
+<script>
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) {
+      window.location.reload();
+    }
+  });
+</script>
+<h1 class="text-xl font-semibold mb-4">글 상세</h1>
+
+<div class="space-y-4">
+  <div>
+    <label class="block text-sm text-gray-500">카테고리</label>
+    <div class="w-full border rounded px-3 py-2 bg-gray-100">{{ post.category }}</div>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-500">제목</label>
+    <div class="w-full border rounded px-3 py-2 bg-gray-100 font-semibold">{{ post.title }}</div>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-500">미리보기</label>
+    {% if meta and (meta.title or meta.description or meta.image) %}
+      <a href="{{ post.url }}" target="_blank" rel="noreferrer noopener" class="block border rounded overflow-hidden bg-white hover:bg-gray-50">
+        {% if meta.image %}
+          <img src="{{ meta.image }}" alt="preview" class="w-full max-h-64 object-cover" />
+        {% endif %}
+        <div class="p-3">
+          <div class="text-xs text-gray-500">{{ meta.site_name or post.url }}</div>
+          <div class="font-semibold">{{ meta.title or '-' }}</div>
+          <div class="text-sm text-gray-700 line-clamp-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ meta.description or '' }}</div>
+        </div>
+      </a>
+    {% elif post.url %}
+      <a href="{{ post.url }}" target="_blank" rel="noreferrer noopener" class="text-blue-600 break-all">{{ post.url }}</a>
+    {% else %}
+      <div class="text-gray-500">URL 없음</div>
+    {% endif %}
+  </div>
+  <div>
+    <label class="block text-sm text-gray-500">내용</label>
+    <div class="w-full border rounded px-3 py-2 bg-gray-100 whitespace-pre-wrap">{{ post.contents }}</div>
+    <div class="text-xs text-gray-500 mt-1">{{ post.date_text }}</div>
+  </div>
+
+  <div class="flex gap-2">
+    <a href="{{ url_for('dashboard') }}" class="px-3 py-2 bg-gray-200 text-gray-800 rounded text-sm">목록</a>
+    <a href="{{ url_for('post_edit_get', id=post.id) }}" class="px-3 py-2 bg-blue-600 text-white rounded text-sm">수정</a>
+    <form action="{{ url_for('post_delete', id=post.id) }}" method="post" onsubmit="return confirm('삭제하시겠습니까?');">
+      <button class="px-3 py-2 bg-red-600 text-white rounded text-sm">삭제</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

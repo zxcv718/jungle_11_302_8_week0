@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1 class="text-xl font-semibold mb-4">미리보기</h1>
+<div class="space-y-3">
+  {% if meta.image %}
+    <img src="{{ meta.image }}" alt="preview" class="max-w-md border rounded"/>
+  {% endif %}
+  <div><span class="font-semibold">제목:</span> {{ meta.title or '-' }}</div>
+  <div><span class="font-semibold">설명:</span> {{ meta.description or '-' }}</div>
+  <div><span class="font-semibold">URL:</span> <a class="text-blue-600" href="{{ meta.url }}" target="_blank" rel="noreferrer noopener">{{ meta.url }}</a></div>
+  <div><span class="font-semibold">Content-Type:</span> {{ meta.content_type or '-' }}</div>
+</div>
+{% endblock %}
