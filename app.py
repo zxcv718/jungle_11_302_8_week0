@@ -44,6 +44,7 @@ if _db is None:
     _db = client["login"]
 users = _db["users"]
 posts = _db["posts"]
+comments = _db["comments"]
 try:
     users.create_index("email", unique=True)
     posts.create_index([("user_id", 1), ("created_at", -1)])
@@ -256,7 +257,7 @@ def post_new_post():
 
 
 @app.get("/post/<id>")
-@jwt_required()
+@jwt_required(optional=True)
 def post_detail(id):
     # Verify ownership
     try:
@@ -282,6 +283,34 @@ def post_detail(id):
 
     url = doc.get("url") or ""
     meta = fetch_and_extract_metadata(url) if url else None
+    # 현재 로그인 사용자 정보
+    try:
+        verify_jwt_in_request(optional=True)
+        jwt_data = get_jwt()
+        current_user = {
+            "id": str(get_jwt_identity()),
+            "name": jwt_data.get("name"),
+            "email": jwt_data.get("email"),
+        }
+    except Exception:
+        current_user = None
+    # 댓글 리스트: DB에서 해당 게시글의 댓글을 조회 (최신순)
+    comment_cur = comments.find({"post_id": oid}).sort("created_at", -1) 
+    comment_list = []
+    kst = ZoneInfo("Asia/Seoul")
+    for c in comment_cur:
+        user = users.find_one({"_id": c["user_id"]})
+        dt = c["created_at"]
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        created_at_kst = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+        comment_list.append({
+            "id": str(c["_id"]),
+            "user_id": str(c["user_id"]),
+            "user_name": user["name"] if user else "알 수 없음",
+            "content": c["content"],
+            "created_at": created_at_kst,
+        })
     return render_template(
         "post_detail.html",
         title="글 상세",
@@ -295,6 +324,8 @@ def post_detail(id):
         },
         meta=meta,
         hide_top_nav=True,
+        current_user=current_user,
+        comments=comment_list,
     )
 
 
@@ -382,6 +413,44 @@ def post_edit_post(id):
     flash("수정되었습니다.", "success")
     return redirect(url_for("post_detail", id=id))
 
+# 댓글 작성
+@app.post("/post/<id>/comments")
+@jwt_required()
+def post_comments(id):
+    content = request.form.get("content", "").strip()
+    if not content:
+        flash("댓글 내용을 입력하세요.", "error")
+        return redirect(url_for("post_detail", id=id))
+    # DB에 댓글 저장 로직 추가
+    comments.insert_one({
+        "post_id" : ObjectId(id),
+        "user_id" : ObjectId(get_jwt_identity()),
+        "content": content,
+        "created_at" : datetime.now(timezone.utc)
+    })
+    flash("댓글이 등록되었습니다.", "success")
+    return redirect(url_for("post_detail", id=id))
+
+# 댓글 삭제
+@app.post("/delete/<comment_id>/comment")
+@jwt_required()
+def comment_delete(comment_id):
+    try:
+        cid = ObjectId(comment_id)
+    except Exception:
+        abort(404)
+    uid = ObjectId(get_jwt_identity())
+    # 삭제 전에 post_id를 미리 조회
+    comment = comments.find_one({"_id": cid, "user_id": uid})
+    post_id = comment.get("post_id") if comment else None
+    res = comments.delete_one({"_id": cid, "user_id": uid})
+    if res.deleted_count:
+        flash("댓글이 삭제되었습니다.", "success")
+    else:
+        flash("삭제할 수 없습니다.", "error")
+    if post_id:
+        return redirect(url_for("post_detail", id=str(post_id)))
+    return redirect(url_for("dashboard"))
 
 @app.get("/api/preview-url")
 @jwt_required()
@@ -520,7 +589,6 @@ def api_session_status():
         "email": j.get("email"),
         "name": j.get("name"),
     }), 200
-
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
