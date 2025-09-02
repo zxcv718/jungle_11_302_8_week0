@@ -4,6 +4,7 @@ import os
 
 from dotenv import load_dotenv
 from flask import Flask, flash, make_response, redirect, render_template, request, url_for, jsonify, abort
+from flask_socketio import SocketIO, join_room, leave_room, emit
 from flask_jwt_extended import (
     JWTManager,
     create_access_token,
@@ -28,6 +29,8 @@ app = Flask(__name__)
 app.config.from_object("config.Config")
 
 jwt = JWTManager(app)
+# SocketIO setup (threading async for simplicity). In production, consider eventlet/gevent.
+socketio = SocketIO(app, cors_allowed_origins=None, async_mode="threading", logger=True, engineio_logger=True)
 @app.after_request
 def add_no_cache_headers(response):
     # Prevent caching to avoid back navigation showing protected content after logout
@@ -44,6 +47,7 @@ if _db is None:
     _db = client["login"]
 users = _db["users"]
 posts = _db["posts"]
+<<<<<<< HEAD
 comments = _db["comments"]
 try:
     users.create_index("email", unique=True)
@@ -52,6 +56,20 @@ try:
 except Exception as e:
     # Avoid crashing on startup if DB requires auth. Handlers will still fail until MONGO_URI is correct.
     print("[warn] Could not ensure indexes:", e)
+=======
+chat_rooms = _db["chat_rooms"]
+chat_messages = _db["chat_messages"]
+if os.getenv("SKIP_INDEX", "0") != "1":
+    try:
+        users.create_index("email", unique=True)
+        posts.create_index([("user_id", 1), ("created_at", -1)])
+        posts.create_index([("title", "text"), ("contents", "text")])
+        chat_rooms.create_index([("category", 1), ("name", 1)])
+        chat_messages.create_index([("room_id", 1), ("created_at", -1)])
+    except Exception as e:
+        # Avoid crashing on startup if DB requires auth. Handlers will still fail until MONGO_URI is correct.
+        print("[warn] Could not ensure indexes:", e)
+>>>>>>> 3914eea (feat: 채팅 기능 구현)
 
 @app.get("/")
 def root():
@@ -155,6 +173,280 @@ def dashboard():
     email = jwt_data.get("email")
     name = jwt_data.get("name")
     return render_template("dashboard.html", title="대시보드", name=name, email=email, identity=identity, hide_top_nav=True)
+
+
+# ---- Chat: views & APIs ----
+
+def get_categories():
+    return ["사회","경제","과학","문화","기술","환경","스포츠","생활","역사","철학","기타"]
+
+
+@app.get("/chat")
+@jwt_required()
+def chat_home():
+    return render_template("chat_home.html", title="카테고리 채팅", hide_top_nav=True)
+
+
+@app.get("/chat/<category>")
+@jwt_required()
+def chat_category(category):
+    if category not in get_categories():
+        abort(404)
+    print(f"[http] chat_category category={category}")
+    return render_template("chat_category.html", title=f"{category} 채팅", category=category, hide_top_nav=True)
+
+
+@app.get("/chat/<category>/<room_id>")
+@jwt_required()
+def chat_room(category, room_id):
+    if category not in get_categories():
+        abort(404)
+    room = chat_rooms.find_one({"_id": ObjectId(room_id), "category": category})
+    if not room:
+        abort(404)
+    print(f"[http] chat_room category={category} room_id={room_id}")
+    ident = get_jwt_identity()
+    user = users.find_one({"_id": ObjectId(ident)})
+    name = user.get("name") if user else "익명"
+    return render_template(
+        "chat_room.html",
+        title=f"{room.get('name')} - {category}",
+        category=category,
+        room={"id": room_id, "name": room.get("name")},
+        me_name=name,
+        me_id=str(ident),
+        hide_top_nav=True,
+    )
+
+
+@app.get("/api/chat/<category>/rooms")
+@jwt_required()
+def api_list_rooms(category):
+    if category not in get_categories():
+        return jsonify({"rooms": []}), 200
+    cur = chat_rooms.find({"category": category}).sort([("_id", -1)])
+    # Attach online peer counts from memory
+    out = []
+    for doc in cur:
+        rid = str(doc.get("_id"))
+        out.append({"id": rid, "name": doc.get("name", ""), "peers": online_counts.get(rid, 0)})
+    print(f"[api] list_rooms category={category} count={len(out)}")
+    return jsonify({"rooms": out}), 200
+
+
+@app.post("/api/chat/<category>/rooms")
+@jwt_required()
+def api_create_room(category):
+    if category not in get_categories():
+        return jsonify({"error": "bad_category"}), 400
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name_required"}), 400
+    doc = {"category": category, "name": name, "created_at": datetime.now(timezone.utc)}
+    res = chat_rooms.insert_one(doc)
+    return jsonify({"id": str(res.inserted_id)}), 200
+
+
+@app.get("/api/chat/<category>/<room_id>/messages")
+@jwt_required()
+def api_room_messages(category, room_id):
+    if category not in get_categories():
+        return jsonify({"messages": []}), 200
+    try:
+        rid = ObjectId(room_id)
+    except Exception:
+        return jsonify({"messages": []}), 200
+    try:
+        limit = min(200, max(1, int(request.args.get("limit", 50))))
+    except ValueError:
+        limit = 50
+    cur = chat_messages.find({"room_id": rid}).sort([("created_at", -1)]).limit(limit)
+    items = []
+    for m in cur:
+        items.append({
+            "id": str(m.get("_id")),
+            "user_id": str(m.get("user_id")) if m.get("user_id") else None,
+            "name": m.get("name"),
+            "text": m.get("text"),
+            "ts": (m.get("created_at") or datetime.now(timezone.utc)).isoformat(),
+        })
+    items.reverse()
+    print(f"[api] messages category={category} room_id={room_id} returned={len(items)}")
+    return jsonify({"messages": items}), 200
+
+
+@app.get("/api/chat/<category>/<room_id>/peers")
+@jwt_required()
+def api_room_peers(category, room_id):
+    try:
+        _ = ObjectId(room_id)
+    except Exception:
+        return jsonify({"peers": 0}), 200
+    peers = online_counts.get(room_id, 0)
+    print(f"[api] peers category={category} room_id={room_id} peers={peers}")
+    return jsonify({"peers": peers}), 200
+
+
+@app.post("/api/chat/<category>/<room_id>/send")
+@jwt_required()
+def api_send_message(category, room_id):
+    if category not in get_categories():
+        return jsonify({"error": "bad_category"}), 400
+    try:
+        rid_obj = ObjectId(room_id)
+    except Exception:
+        return jsonify({"error": "bad_room"}), 400
+    if not chat_rooms.find_one({"_id": rid_obj, "category": category}):
+        return jsonify({"error": "not_found"}), 404
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    cid = (data.get("cid") or "").strip() or None
+    if not text:
+        return jsonify({"error": "text_required"}), 400
+    uid = ObjectId(get_jwt_identity())
+    j = get_jwt()
+    name = j.get("name") or "익명"
+    created = datetime.now(timezone.utc)
+    doc = {"room_id": rid_obj, "user_id": uid, "name": name, "text": text, "created_at": created}
+    try:
+        res = chat_messages.insert_one(doc)
+        mid = str(res.inserted_id)
+    except Exception as e:
+        print("[api] message insert failed:", e)
+        mid = None
+    # Broadcast if any listeners via Socket.IO
+    try:
+        socketio.emit("new_message", {
+            "id": mid or "temp-" + str(int(created.timestamp()*1000)),
+            "room_id": room_id,
+            "user_id": str(uid),
+            "name": name,
+            "text": text,
+            "ts": created.isoformat(),
+            "cid": cid,
+        }, to=room_id)
+    except Exception as e:
+        print("[api] broadcast failed:", e)
+    print(f"[api] send category={category} room_id={room_id} by={str(uid)} mid={mid} cid={cid}")
+    return jsonify({"id": mid, "ts": created.isoformat(), "name": name, "text": text, "cid": cid, "user_id": str(uid)}), 200
+
+
+# In-memory online counters (best-effort)
+online_counts = {}
+sid_rooms = {}
+
+
+@socketio.on("connect")
+def ws_connect():
+    # Enforce JWT via cookies for websocket handshake
+    try:
+        verify_jwt_in_request(optional=False)
+        uid = get_jwt_identity()
+        origin = request.headers.get('Origin')
+        ua = request.headers.get('User-Agent')
+        ck = list(request.cookies.keys()) if request.cookies else []
+        print(f"[ws] connect ok sid={request.sid} uid={uid} origin={origin} ua={(ua or '')[:80]} cookies={ck}")
+    except Exception as e:
+        print("[ws] connect denied:", e)
+        return False
+    # OK
+    sid_rooms[request.sid] = set()
+
+
+@socketio.on("disconnect")
+def ws_disconnect():
+    rooms = sid_rooms.pop(request.sid, set())
+    print(f"[ws] disconnect sid={request.sid} rooms={list(rooms)}")
+    for rid in rooms:
+        online_counts[rid] = max(0, online_counts.get(rid, 1) - 1)
+        emit("room_peers", {"room_id": rid, "peers": online_counts.get(rid, 0)}, to=rid)
+
+
+@socketio.on("join")
+def ws_join(data):
+    try:
+        verify_jwt_in_request(optional=False)
+    except Exception:
+        return
+    rid = (data or {}).get("room_id")
+    if not rid:
+        return
+    # verify room exists
+    try:
+        room_doc = chat_rooms.find_one({"_id": ObjectId(rid)})
+    except Exception:
+        room_doc = None
+    if not room_doc:
+        return
+    print(f"[ws] join sid={request.sid} room={rid}")
+    join_room(rid)
+    sid_rooms.setdefault(request.sid, set()).add(rid)
+    online_counts[rid] = online_counts.get(rid, 0) + 1
+    emit("room_peers", {"room_id": rid, "peers": online_counts[rid]}, to=rid)
+    emit("joined", {"room_id": rid, "peers": online_counts[rid]}, to=request.sid)
+
+
+@socketio.on("leave")
+def ws_leave(data):
+    rid = (data or {}).get("room_id")
+    if not rid:
+        return
+    print(f"[ws] leave sid={request.sid} room={rid}")
+    leave_room(rid)
+    if request.sid in sid_rooms and rid in sid_rooms[request.sid]:
+        sid_rooms[request.sid].remove(rid)
+        online_counts[rid] = max(0, online_counts.get(rid, 1) - 1)
+        emit("room_peers", {"room_id": rid, "peers": online_counts.get(rid, 0)}, to=rid)
+
+
+@socketio.on("send_message")
+def ws_send_message(data):
+    try:
+        verify_jwt_in_request(optional=False)
+    except Exception:
+        return
+    rid = (data or {}).get("room_id")
+    text = (data or {}).get("text", "").strip()
+    cid = (data or {}).get("cid") or None
+    if not rid or not text:
+        return
+    # Verify room
+    try:
+        rid_obj = ObjectId(rid)
+    except Exception:
+        return
+    if not chat_rooms.find_one({"_id": rid_obj}):
+        return
+    uid = ObjectId(get_jwt_identity())
+    j = get_jwt()
+    name = j.get("name") or "익명"
+    created = datetime.now(timezone.utc)
+    doc = {
+        "room_id": rid_obj,
+        "user_id": uid,
+        "name": name,
+        "text": text,
+        "created_at": created,
+    }
+    try:
+        res = chat_messages.insert_one(doc)
+        mid = str(res.inserted_id)
+    except Exception as e:
+        print("[ws] message insert failed:", e)
+        mid = None
+    payload = {
+        "id": mid or "temp-" + str(int(created.timestamp()*1000)),
+        "room_id": rid,
+        "user_id": str(uid),
+        "name": name,
+        "text": text,
+        "ts": created.isoformat(),
+        "cid": cid,
+    }
+    print(f"[ws] new_message room={rid} by={str(uid)} id={payload['id']} cid={cid}")
+    emit("new_message", payload, to=rid)
+    emit("send_ack", {"id": payload["id"]}, to=request.sid)
 
 
 @app.get("/api/my-posts")
@@ -653,4 +945,8 @@ def api_session_status():
 if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "5050"))
+<<<<<<< HEAD
     app.run(host=host, port=port, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
+=======
+    socketio.run(app, host=host, port=port, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
+>>>>>>> 3914eea (feat: 채팅 기능 구현)

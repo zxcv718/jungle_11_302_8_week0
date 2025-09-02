@@ -1,0 +1,190 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="flex items-center justify-between mb-3">
+  <div>
+    <div class="text-sm text-gray-500">{{ category }}</div>
+    <h1 class="text-2xl font-bold">{{ room.name }}</h1>
+  </div>
+  <a href="{{ url_for('chat_category', category=category) }}" class="text-sm text-blue-700">← 방 목록</a>
+</div>
+
+<div class="mb-2 text-sm text-gray-600">현재 인원: <span id="peerCount">-</span>명</div>
+
+<div id="messages" class="h-[50vh] overflow-y-auto bg-white border rounded p-3 space-y-2"></div>
+
+<form id="sendForm" class="mt-3 flex gap-2" onsubmit="return false;">
+  <input id="msgInput" class="flex-1 border rounded px-3 py-2" placeholder="메시지를 입력하세요" />
+  <button id="sendBtn" type="button" class="px-3 py-2 bg-blue-600 text-white rounded">전송</button>
+  <button id="leaveBtn" type="button" class="px-3 py-2 bg-gray-600 text-white rounded">나가기</button>
+ </form>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+<script id="roomScript" data-room-id="{{ room.id }}" data-me-name="{{ me_name }}" data-me-id="{{ me_id }}" data-back="{{ url_for('chat_category', category=category) }}">
+  if (window.__chatInit) { console.log('[chat] duplicate init ignored'); } else { window.__chatInit = true; }
+  console.log('[chat] room script init');
+  window.addEventListener('error', (e) => { try { console.error('[chat] script error', e.message || e.error); } catch {} });
+  const roomId = document.currentScript.getAttribute('data-room-id');
+  const messagesEl = document.getElementById('messages');
+  const peerEl = document.getElementById('peerCount');
+  const meName = document.currentScript.getAttribute('data-me-name');
+  const meId = document.currentScript.getAttribute('data-me-id');
+  const backUrl = document.currentScript.getAttribute('data-back');
+  const sendBtn = document.getElementById('sendBtn');
+  const leaveBtn = document.getElementById('leaveBtn');
+  const msgInput = document.getElementById('msgInput');
+  const seenCids = new Set();
+  let isComposing = false;
+
+  function appendMsg({name, text, ts, user_id}) {
+    const t = new Date(ts);
+    const when = isNaN(t.getTime()) ? '' : t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    const isMe = user_id && meId && String(user_id) === String(meId);
+    const wrap = document.createElement('div');
+    wrap.className = `w-full flex ${isMe ? 'justify-end' : 'justify-start'} my-1`;
+    const bubble = document.createElement('div');
+    bubble.className = `inline-block max-w-[75%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${isMe ? 'bg-blue-500 text-white rounded-br-sm' : 'bg-gray-200 text-gray-900 rounded-bl-sm'}`;
+    const header = document.createElement('div');
+    header.className = `mb-0.5 text-[10px] ${isMe ? 'text-blue-100' : 'text-gray-500'}`;
+    header.textContent = `${name || '익명'} ${when ? '· ' + when : ''}`;
+    const body = document.createElement('div');
+    body.innerHTML = (text||'').replace(/</g,'&lt;').replace(/\n/g,'<br>');
+    bubble.appendChild(header);
+    bubble.appendChild(body);
+    wrap.appendChild(bubble);
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  async function loadHistory() {
+    const res = await fetch(`{{ url_for('api_room_messages', category=category, room_id=room.id) }}`, { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const j = await res.json();
+    (j.messages||[]).forEach(appendMsg);
+  }
+  loadHistory();
+
+  // Always fetch initial peers once on load (not tied to websocket)
+  fetch(`{{ url_for('api_room_peers', category=category, room_id=room.id) }}`, { credentials: 'same-origin' })
+    .then(r => r.ok ? r.json() : { peers: 0 })
+    .then(j => { peerEl.textContent = (j.peers ?? 0); })
+    .catch(() => { peerEl.textContent = '0'; });
+
+  async function ensureAccess() {
+    try {
+      const s = await fetch(`{{ url_for('api_session_status') }}`, { credentials: 'same-origin' });
+      if (!s.ok) return;
+      const j = await s.json();
+      if (!j.authenticated || (j.type && j.type !== 'access')) {
+        await fetch(`{{ url_for('refresh') }}`, { method: 'POST', credentials: 'same-origin' });
+      }
+    } catch {}
+  }
+
+  // Bind UI handlers first so they work even if socket fails to load
+  function genCid() {
+    try { return 'c.' + Date.now().toString(36) + '.' + Math.random().toString(36).slice(2,8); } catch { return null; }
+  }
+
+  async function sendCurrent(socket) {
+    const text = (msgInput.value||'').trim();
+    if (!text) return;
+    try {
+      if (socket && socket.connected) {
+        console.log('[chat] emit send_message');
+        socket.emit('send_message', { room_id: roomId, text, cid: genCid() });
+      } else {
+        console.log('[chat] http fallback send');
+        const cid = genCid();
+        const r = await fetch(`{{ url_for('api_send_message', category=category, room_id=room.id) }}`, {
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text })
+        });
+        if (r.ok) {
+          const j = await r.json().catch(() => null);
+          // No socket to receive broadcast; append locally after successful POST
+          appendMsg({ name: meName || '나', text, ts: (j && j.ts) || new Date().toISOString(), cid, user_id: (j && j.user_id) || meId });
+        }
+      }
+    } catch (err) { console.warn('send failed', err); }
+    msgInput.value = '';
+  }
+
+  sendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); sendCurrent(window.__socket); });
+  // Track IME composition to avoid truncation/duplicate on Korean input
+  msgInput.addEventListener('compositionstart', () => { isComposing = true; });
+  msgInput.addEventListener('compositionend', () => { isComposing = false; });
+  msgInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      // If composing (IME), ignore Enter to avoid sending partial text
+      if (isComposing || e.isComposing || e.keyCode === 229) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      // Defer to next tick to ensure input value is finalized
+      setTimeout(() => sendCurrent(window.__socket), 0);
+    }
+  });
+  document.getElementById('sendForm').addEventListener('submit', (e) => { e.preventDefault(); e.stopPropagation(); return false; });
+  leaveBtn.addEventListener('click', () => {
+    try { if (window.__socket) window.__socket.emit('leave', { room_id: roomId }); } catch {}
+    window.location.href = backUrl;
+  });
+
+  async function startSocket() {
+    await ensureAccess();
+    let socket = null;
+    try {
+      if (window.__socket && window.__socket.connected) {
+        console.log('[chat] reusing existing socket');
+        socket = window.__socket;
+      } else if (window.io) {
+        socket = io('/', { path: '/socket.io', withCredentials: true, transports: ['websocket', 'polling'], autoConnect: true });
+        window.__socket = socket;
+      } else {
+        console.warn('[chat] socket.io client not loaded');
+      }
+    } catch (e) {
+      console.warn('[chat] socket init failed', e);
+    }
+    if (!socket) return; // UI still works via HTTP fallback
+
+    // Bind socket event listeners only once per socket instance
+    if (!socket.__handlersBound) {
+      socket.on('connect', () => {
+        console.log('[chat] socket connected', socket.id);
+        // Join current room once
+        if (!socket.__joinedRooms) socket.__joinedRooms = new Set();
+        if (!socket.__joinedRooms.has(roomId)) {
+          socket.emit('join', { room_id: roomId });
+          socket.__joinedRooms.add(roomId);
+        }
+      });
+      socket.on('connect_error', (err) => {
+        console.warn('[chat] socket connect_error', err);
+      });
+      socket.on('room_peers', ({room_id, peers}) => { if (room_id===roomId) { console.log('[chat] room_peers', peers); peerEl.textContent = peers; } });
+      socket.on('joined', ({room_id, peers}) => { if (room_id===roomId) { console.log('[chat] joined ack', peers); peerEl.textContent = peers; } });
+    socket.on('new_message', (m) => {
+        if (m.room_id!==roomId) return;
+        if (m.cid) {
+          if (seenCids.has(m.cid)) return;
+          seenCids.add(m.cid);
+        }
+        console.log('[chat] new_message', m);
+        appendMsg(m);
+      });
+      socket.__handlersBound = true;
+    } else {
+      // Ensure we're joined to this room if reconnecting or navigating back
+      if (!socket.__joinedRooms) socket.__joinedRooms = new Set();
+      if (!socket.__joinedRooms.has(roomId) && socket.connected) {
+        socket.emit('join', { room_id: roomId });
+        socket.__joinedRooms.add(roomId);
+      }
+    }
+
+  // no-op
+  }
+  startSocket();
+</script>
+{% endblock %}

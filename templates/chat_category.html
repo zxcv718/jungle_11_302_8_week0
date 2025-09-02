@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-2xl font-bold">{{ category }} 채팅</h1>
+  <a href="{{ url_for('chat_home') }}" class="text-sm text-blue-700">← 카테고리로</a>
+</div>
+
+<div class="grid md:grid-cols-3 gap-6">
+  <section class="md:col-span-2">
+    <h2 class="font-semibold mb-2">채팅방 목록</h2>
+    <div id="roomList" class="space-y-2"></div>
+    <div id="noRooms" class="text-gray-500 hidden">아직 채팅방이 없습니다. 새로 만들어 보세요.</div>
+  </section>
+  <aside>
+    <h2 class="font-semibold mb-2">채팅방 생성</h2>
+    <form id="createForm" class="bg-white border rounded p-3 space-y-2">
+      <label class="block text-sm">방 이름</label>
+      <input name="name" required maxlength="40" class="w-full border rounded px-2 py-1" placeholder="예: 경제 토론방" />
+      <button class="w-full px-3 py-2 bg-blue-600 text-white rounded text-sm">생성</button>
+    </form>
+  </aside>
+</div>
+
+<script id="chatCatScript" data-cat="{{ category }}">
+  const catName = document.currentScript.getAttribute('data-cat');
+  async function loadRooms() {
+    const res = await fetch(`{{ url_for('api_list_rooms', category='__CAT__') }}`.replace('__CAT__', encodeURIComponent(catName)), { credentials: 'same-origin' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const list = document.getElementById('roomList');
+    const empty = document.getElementById('noRooms');
+    list.innerHTML = '';
+    (data.rooms || []).forEach(r => {
+      const a = document.createElement('a');
+      a.href = `{{ url_for('chat_room', category='__CAT__', room_id='__RID__') }}`
+        .replace('__CAT__', encodeURIComponent(catName))
+        .replace('__RID__', r.id);
+      a.className = 'block p-3 bg-white rounded border hover:bg-gray-50';
+      a.innerHTML = `<div class="font-medium">${r.name}</div><div class="text-sm text-gray-500">인원 ${r.peers || 0}명</div>`;
+      list.appendChild(a);
+    });
+    if (!list.children.length) empty.classList.remove('hidden'); else empty.classList.add('hidden');
+  }
+  loadRooms();
+
+  document.getElementById('createForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+  const res = await fetch(`{{ url_for('api_create_room', category='__CAT__') }}`.replace('__CAT__', encodeURIComponent(catName)), {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: fd.get('name') })
+    });
+    if (!res.ok) { alert('생성 실패'); return; }
+    const j = await res.json();
+    window.location.href = `{{ url_for('chat_room', category='__CAT__', room_id='__RID__') }}`
+      .replace('__CAT__', encodeURIComponent(catName)).
+      replace('__RID__', j.id);
+  });
+</script>
+{% endblock %}
