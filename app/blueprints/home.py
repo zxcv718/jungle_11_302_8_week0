@@ -159,13 +159,9 @@ def root():
                 pass
             subscribed_posts = [process_post_doc(doc) for doc in raw_sub_posts]
 
-    # 인기글에 대한 메타데이터(이미지)를 가져와 채워줍니다.
-    for post in popular_posts:
-        if post.get("url"):
-            meta = fetch_and_extract_metadata(post["url"])
-            post["meta"] = {
-                "image": meta.image
-            }
+    # 주의: 과거에는 여기서 외부 URL에 동기 요청하여 메타 이미지를 채웠습니다.
+    # 이로 인해 홈 렌더링이 느려질 수 있어 제거했습니다.
+    # 메타 이미지는 글 상세 페이지 접근 시 캐시되며, 추후 비동기 로딩 API로 대체 가능.
 
     return render_template(
         "home.html", 

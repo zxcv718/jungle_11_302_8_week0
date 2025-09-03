@@ -1,5 +1,5 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask import Blueprint, render_template, request, redirect, url_for, flash, make_response
+from flask_jwt_extended import jwt_required, get_jwt_identity, unset_jwt_cookies
 from bson import ObjectId
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -76,9 +76,69 @@ def profile_edit_post():
 @jwt_required()
 def user_delete():
 	uid = ObjectId(get_jwt_identity())
-	# Minimal behavior: do nothing but redirect with flash (safety)
-	flash("계정 삭제는 데모에서 비활성화되어 있습니다.", "error")
-	return redirect(url_for("mypage.mypage"))
+
+	# 1) 수집: 내가 작성한 게시글 ID들
+	post_ids = [doc["_id"] for doc in mongo._db["posts"].find({"user_id": uid}, {"_id": 1})]
+
+	# 2) 댓글 삭제: 내가 쓴 댓글 + 내 게시글에 달린 댓글
+	try:
+		mongo._db["comments"].delete_many({"user_id": uid})
+		if post_ids:
+			mongo._db["comments"].delete_many({"post_id": {"$in": post_ids}})
+	except Exception:
+		pass
+
+	# 3) 좋아요 정리: 다른 댓글에서 내 좋아요 흔적 제거
+	try:
+		mongo._db["comments"].update_many({"likes": uid}, {"$pull": {"likes": uid}})
+	except Exception:
+		pass
+
+	# 4) 구독 정리: 다른 유저들의 subscriptions에서 나 제거
+	try:
+		mongo._db["users"].update_many({"subscriptions": uid}, {"$pull": {"subscriptions": uid}})
+	except Exception:
+		pass
+
+	# 5) 알림/채팅/세션/조회수 정리
+	try:
+		mongo._db["notifications"].delete_many({"$or": [{"user_id": uid}, {"actor_id": uid}]})
+		mongo._db["chat_messages"].delete_many({"user_id": uid})
+		# 사용자 세션 버전 정보 제거
+		mongo._db.user_sessions.delete_many({"user_id": uid})
+		# post_views 컬렉션 정리(있다면)
+		try:
+			mongo._db.post_views.delete_many({"user_id": uid})
+		except Exception:
+			pass
+	except Exception:
+		pass
+
+	# 6) 다른 유저들의 liked_posts에서 내가 삭제한 게시글 ID들 제거
+	try:
+		if post_ids:
+			mongo._db["users"].update_many({"liked_posts": {"$in": post_ids}}, {"$pull": {"liked_posts": {"$in": post_ids}}})
+	except Exception:
+		pass
+
+	# 7) 내 게시글 삭제
+	try:
+		if post_ids:
+			mongo._db["posts"].delete_many({"_id": {"$in": post_ids}})
+	except Exception:
+		pass
+
+	# 8) 사용자 삭제
+	try:
+		mongo._db["users"].delete_one({"_id": uid})
+	except Exception:
+		pass
+
+	flash("회원탈퇴가 완료되었습니다.", "success")
+	# JWT 쿠키 제거 후 로그인 페이지로 이동
+	resp = make_response(redirect(url_for("auth.login_get")))
+	unset_jwt_cookies(resp)
+	return resp
 
 
 @mypage_bp.post("/mypage/posts/delete", endpoint="multi_post_delete")

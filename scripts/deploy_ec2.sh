@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Be strict; enable pipefail only if supported (bash). Some shells (sh/dash/zsh) don't support it.
+set -eu
+if [ -n "${BASH_VERSION:-}" ]; then
+  set -o pipefail
+fi
 
 # JStory Flask app one-shot deployment (HTTP, no HTTPS)
 # - Uses .env in project root (includes FLASK_DEBUG, SECRET_KEY, JWT_SECRET_KEY, MONGO_URI, COOKIE_SECURE)
@@ -41,13 +45,15 @@ if ! grep -q '^PORT=' "$APP_DIR/.env" 2>/dev/null; then
 fi
 
 echo "[5/7] Sanity check app import..."
-python - <<'PY'
-from dotenv import load_dotenv
-load_dotenv()
+if [ "${SKIP_SANITY:-0}" = "1" ]; then
+  echo "Skipping sanity check (SKIP_SANITY=1)"
+else
+  "$VENV_DIR/bin/python" - <<'PY'
 from app import create_app
 app = create_app('config.Config')
-print('OK: app created, secret len =', len(app.config.get('SECRET_KEY','')))
+print('OK: app created')
 PY
+fi
 
 echo "[6/7] Writing systemd service..."
 SERVICE_CONTENT="[Unit]

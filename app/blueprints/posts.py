@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import os
 
 from metadata import fetch_and_extract_metadata, normalize_url
+from ..services.meta_cache import get_or_fetch
 from ..services.notifications import create_notification
 
 bp = Blueprint("posts", __name__)
@@ -195,7 +196,39 @@ def post_detail(id):
         date_text = None
 
     url = doc.get("url") or ""
-    meta = fetch_and_extract_metadata(url) if url else None
+    # 메타데이터: 캐시 데이터를 기존 문서 메타와 병합하여 항상 템플릿에 전달합니다.
+    meta = doc.get("meta") or {}
+    if url:
+        try:
+            cached = get_or_fetch(url)
+        except Exception:
+            cached = {}
+        def pick(a, b):
+            a_ok = bool((a or "").strip()) if isinstance(a, str) else (a is not None)
+            b_ok = bool((b or "").strip()) if isinstance(b, str) else (b is not None)
+            return a if a_ok else (b if b_ok else None)
+        merged = {
+            "title": pick(meta.get("title"), cached.get("title")),
+            "description": pick(meta.get("description"), cached.get("description")),
+            "image": pick(meta.get("image"), cached.get("image")),
+            "site_name": pick(meta.get("site_name"), cached.get("site_name")),
+            "favicon": pick(meta.get("favicon"), cached.get("favicon")),
+            "content_type": pick(meta.get("content_type"), cached.get("content_type")),
+        }
+        # 템플릿용 메타로 교체
+        meta = merged
+        # DB에 저장된 메타가 덜 풍부하면 보강 저장
+        try:
+            def norm(x):
+                return (x or "").strip() if isinstance(x, str) else x
+            improved = {}
+            for k, v in merged.items():
+                if norm(v) and not norm((doc.get("meta") or {}).get(k)):
+                    improved[k] = v
+            if improved:
+                mongo._db.posts.update_one({"_id": oid}, {"$set": {**{f"meta.{k}": v for k, v in improved.items()}}})
+        except Exception:
+            pass
     
     # 댓글 리스트: _DB에서 해당 게시글의 댓글을 조회 (최신순)
     comment_cur = mongo._db.comments.find({"post_id": oid}).sort("created_at", -1) 
@@ -235,7 +268,7 @@ def post_detail(id):
                 "name": author.get("name", "알 수 없음")
             } if author else None
         },
-        meta=meta,
+    meta=meta,
         hide_top_nav=True,
         current_user=current_user,
         is_liked=is_liked,
@@ -489,18 +522,23 @@ def api_preview_url():
     url, err = normalize_url(raw)
     if err:
         return jsonify({"ok": False, "error": "invalid_url", "reason": err}), 200
-    meta = fetch_and_extract_metadata(url)
-    ok = bool((meta.title and meta.title.strip()) or (meta.description and meta.description.strip()) or (meta.image and meta.image.strip()))
-    ct = (meta.content_type or "").lower()
+    # Use cached metadata for speed; fetch if not cached.
+    m = get_or_fetch(url)
+    ok = bool(
+        (m.get("title") or "").strip()
+        or (m.get("description") or "").strip()
+        or (m.get("image") or "").strip()
+    )
+    ct = (m.get("content_type") or "").lower()
     if "application/pdf" in ct or "application/octet-stream" in ct:
-        return jsonify({"ok": False, "error": "unsupported_content", "content_type": meta.content_type}), 200
+        return jsonify({"ok": False, "error": "unsupported_content", "content_type": m.get("content_type")}), 200
     return jsonify({
         "ok": ok,
-        "title": meta.title,
-        "description": meta.description,
-        "image": meta.image,
-        "url": meta.url,
-        "content_type": meta.content_type,
+        "title": m.get("title"),
+        "description": m.get("description"),
+        "image": m.get("image"),
+        "url": url,
+        "content_type": m.get("content_type"),
     }), 200
 
 
@@ -523,7 +561,8 @@ def api_upload_image():
     now = datetime.now(timezone.utc)
     yyyy = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y")
     mm = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%m")
-    upload_dir = os.path.join(current_app.root_path, "static", "uploads", yyyy, mm)
+    # Use Flask's configured static folder to ensure files are served correctly
+    upload_dir = os.path.join(current_app.static_folder, "uploads", yyyy, mm)
     os.makedirs(upload_dir, exist_ok=True)
     orig = secure_filename(f.filename or "image")
     base, ext = os.path.splitext(orig)

@@ -236,8 +236,15 @@
     const t = new Date(ts);
     const when = isNaN(t.getTime()) ? '' : t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
     const isMe = user_id && meId && String(user_id) === String(meId);
-  // Ignore system messages here; they are handled via 'system_notice' channel only to prevent duplicates
-  if (name === '알림') { return; }
+    // System notice (join/leave)
+    if (name === '알림') {
+      const sys = document.createElement('div');
+      sys.className = 'w-full my-1 text-center text-xs text-gray-500 italic';
+      sys.textContent = String(text||'');
+      messagesEl.appendChild(sys);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return;
+    }
     const wrap = document.createElement('div');
     wrap.className = `w-full flex ${isMe ? 'justify-end' : 'justify-start'} my-1`;
     const bubble = document.createElement('div');
@@ -383,13 +390,13 @@
   async function sendCurrent(socket) {
     const text = (msgInput.value||'').trim();
     if (!text) return;
+    const cid = genCid();
     try {
       if (socket && socket.connected) {
   console.log('[chat] emit send_message');
-  socket.emit('send_message', { room_id: roomId, text, cid: genCid(), me_id: meId, me_name: meName });
+  socket.emit('send_message', { room_id: roomId, text, cid, me_id: meId, me_name: meName });
       } else {
         console.log('[chat] http fallback send');
-        const cid = genCid();
   const r = await fetch(`{{ url_for('chat.api_send_message', category=category, room_id=room.id) }}`, {
           method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text })
         });
@@ -405,7 +412,7 @@
     msgInput.value = '';
     // If socket path handled, preview for my message (use cid as key until server id arrives)
     if (socket && socket.connected) {
-      maybePreviewURL(text, true, genCid());
+      maybePreviewURL(text, true, cid);
     }
   }
 
@@ -482,19 +489,21 @@
         const key = m.id || m.cid || null;
         appendMsg(m, key);
         const isMe = m.user_id && meId && String(m.user_id) === String(meId);
-        if (m.preview && m.preview.ok) {
-          appendPreviewCard(m.preview, isMe, key);
-        } else {
-          if (key && previewedIds.has(key)) return;
-          if (key) previewedIds.add(key);
-          maybePreviewURL(m.text, isMe, key);
+        // Prevent duplicate previews: consider both id and cid as aliases
+        const already = (m.cid && previewedIds.has(m.cid)) || (key && previewedIds.has(key));
+        if (!already) {
+          if (m.preview && m.preview.ok) {
+            if (key) previewedIds.add(key);
+            if (m.cid) previewedIds.add(m.cid);
+            appendPreviewCard(m.preview, isMe, key);
+          } else {
+            if (key) previewedIds.add(key);
+            if (m.cid) previewedIds.add(m.cid);
+            maybePreviewURL(m.text, isMe, key);
+          }
         }
       });
-      // Dedicated system notice channel (ensures all peers render a center notice)
-  socket.on('system_notice', ({room_id, text}) => {
-        if (room_id!==roomId) return;
-        appendMsg({ name: '알림', text, ts: new Date().toISOString(), user_id: null, id: null, cid: null });
-      });
+      // Remove separate system_notice render to avoid duplicate with system new_message
       socket.__handlersBound = true;
     } else {
       // Ensure we're joined to this room if reconnecting or navigating back

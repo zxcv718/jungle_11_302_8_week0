@@ -11,11 +11,9 @@
           <!-- Carousel slides -->
           <div id="carousel-slides" class="flex transition-transform duration-500 ease-in-out">
             {% for post in popular_posts %}
-            <div class="w-full flex-shrink-0">
+            <div class="w-full flex-shrink-0" data-url="{{ post.url or '' }}">
               <a href="{{ url_for('posts.post_detail', id=post.id) }}" class="block relative h-72 bg-gray-200 text-white">
-                {% if post.meta and post.meta.image %}
-                <img src="{{ post.meta.image }}" alt="{{ post.title }}" class="w-full h-full object-cover" />
-                {% endif %}
+                <img data-role="carousel-img" src="{{ (post.meta.image if post.meta and post.meta.image) or '' }}" alt="{{ post.title }}" class="w-full h-full object-cover {{ '' if post.meta and post.meta.image else 'hidden' }}" />
                 <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
                 <div class="absolute bottom-0 left-0 right-0 p-4 pl-16 pb-24">
                   <h3 class="font-bold truncate text-3xl">{{ post.title or '' }}</h3>
@@ -149,6 +147,27 @@
         resetCarouselInterval();
       }
     });
+
+    // Lazy-load carousel images if missing (non-blocking)
+    try {
+      const slidesEls = Array.from(carouselSlides.querySelectorAll('.w-full.flex-shrink-0'));
+      slidesEls.forEach(async (slide) => {
+        const imgEl = slide.querySelector('img[data-role="carousel-img"]');
+        if (!imgEl) return;
+        if (imgEl.getAttribute('src')) return; // already has image
+        const url = slide.getAttribute('data-url');
+        if (!url) return;
+        try {
+          const resp = await fetch(`/api/preview-url?url=${encodeURIComponent(url)}`);
+          if (!resp.ok) return;
+          const data = await resp.json();
+          if (data && data.ok && data.image) {
+            imgEl.src = data.image;
+            imgEl.classList.remove('hidden');
+          }
+        } catch {}
+      });
+    } catch {}
 
     // Initial setup
     updateCarousel();
