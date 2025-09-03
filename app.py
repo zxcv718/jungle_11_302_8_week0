@@ -3,8 +3,8 @@ from zoneinfo import ZoneInfo
 import os
 
 from dotenv import load_dotenv
-from flask import Flask, flash, make_response, redirect, render_template, request, url_for, jsonify, abort
 from flask_socketio import SocketIO, join_room, leave_room, emit
+from flask import Flask, flash, make_response, redirect, render_template, request, url_for, jsonify, abort, render_template_string
 from flask_jwt_extended import (
     JWTManager,
     create_access_token,
@@ -659,7 +659,11 @@ def post_detail(id):
             "user_name": user["name"] if user else "알 수 없음",
             "content": c["content"],
             "created_at": created_at_kst,
+            "like_count": len(c.get("likes", [])),
         })
+    # 댓글 리스트 생성 완료 후, 추천수 기준 상위 3개 추출 (추천수 1 이상만)
+    best_comments = [c for c in comment_list if c["like_count"] > 0]
+    best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
     return render_template(
         "post_detail.html",
         title="글 상세",
@@ -675,6 +679,7 @@ def post_detail(id):
         hide_top_nav=True,
         current_user=current_user,
         comments=comment_list,
+        best_comments=best_comments,
     )
 
 
@@ -766,40 +771,255 @@ def post_edit_post(id):
 @app.post("/post/<id>/comments")
 @jwt_required()
 def post_comments(id):
-    content = request.form.get("content", "").strip()
-    if not content:
-        flash("댓글 내용을 입력하세요.", "error")
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    try:
+        post_id = ObjectId(id)
+        user_id = ObjectId(get_jwt_identity())
+        content = request.form.get("content", "").strip()
+        if not content:
+            msg = "댓글 내용을 입력하세요."
+            if is_ajax:
+                return jsonify({"ok": False, "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("post_detail", id=id))
+        now = datetime.now(timezone.utc)
+        comment_doc = {
+            "post_id": post_id,
+            "user_id": user_id,
+            "content": content,
+            "created_at": now,
+            "likes": []
+        }
+        inserted = comments.insert_one(comment_doc)
+        # 새 댓글 정보
+        user = users.find_one({"_id": user_id})
+        kst = ZoneInfo("Asia/Seoul")
+        created_at_kst = now.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+        comment_data = {
+            "id": str(inserted.inserted_id),
+            "user_id": str(user_id),
+            "user_name": user["name"] if user else "알 수 없음",
+            "content": content,
+            "created_at": created_at_kst,
+            "like_count": 0
+        }
+        # 댓글 HTML (SSR 스타일)
+        comment_html = render_template_string(
+            '<div class="border rounded px-3 py-2 bg-white flex justify-between items-center">'
+            '  <div>'
+            '    <span class="font-semibold">{{ c.user_name }}</span>'
+            '    <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>'
+            '    <div class="mt-1">{{ c.content }}</div>'
+            '    <button type="button" class="text-emerald-600 text-xs px-2 py-1 rounded border" data-cid="{{ c.id }}" onclick="likeComment(this.dataset.cid, this)">추천</button>'
+            '    <span class="ml-1 text-xs text-gray-700" id="like-count-{{ c.id }}">0</span>'
+            '  </div>'
+            '  <form action="' + url_for('comment_delete', comment_id=comment_data["id"]) + '" method="post" onsubmit="return confirm(\'댓글을 삭제하시겠습니까?\');">'
+            '    <button class="text-red-600 text-xs px-2 py-1 rounded">삭제</button>'
+            '  </form>'
+            '</div>',
+            c=comment_data
+        )
+        # 베스트 댓글 영역 갱신
+        all_comments = list(comments.find({"post_id": post_id}))
+        comment_list = []
+        for c in all_comments:
+            user = users.find_one({"_id": c["user_id"]})
+            dt = c["created_at"]
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            created_at_kst = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+            comment_list.append({
+                "id": str(c["_id"]),
+                "user_id": str(c["user_id"]),
+                "user_name": user["name"] if user else "알 수 없음",
+                "content": c["content"],
+                "created_at": created_at_kst,
+                "like_count": len(c.get("likes", [])),
+            })
+        best_comments = [c for c in comment_list if c["like_count"] > 0]
+        best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+        best_comments_html = render_template_string(
+            '{% if best_comments and best_comments|length > 0 %}'
+            '<div class="mb-6">'
+            '  <h2 class="text-lg font-bold text-emerald-700 mb-2">베스트 댓글</h2>'
+            '  <div class="space-y-2">'
+            '    {% for c in best_comments %}'
+            '    <div class="border rounded px-3 py-2 bg-yellow-50 flex justify-between items-center">'
+            '      <div>'
+            '        <span class="font-semibold">{{ c.user_name }}</span>'
+            '        <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>'
+            '        <div class="mt-1">{{ c.content }}</div>'
+            '      </div>'
+            '      <span class="text-emerald-600 font-bold text-sm">추천 수 {{ c.like_count }}</span>'
+            '    </div>'
+            '    {% endfor %}'
+            '  </div>'
+            '</div>'
+            '{% endif %}',
+            best_comments=best_comments
+        )
+        if is_ajax:
+            return jsonify({"ok": True, "comment_html": comment_html, "best_comments_html": best_comments_html})
+        flash("댓글이 등록되었습니다.", "success")
         return redirect(url_for("post_detail", id=id))
-    # DB에 댓글 저장 로직 추가
-    comments.insert_one({
-        "post_id" : ObjectId(id),
-        "user_id" : ObjectId(get_jwt_identity()),
-        "content": content,
-        "created_at" : datetime.now(timezone.utc)
-    })
-    flash("댓글이 등록되었습니다.", "success")
-    return redirect(url_for("post_detail", id=id))
+    except Exception as e:
+        if is_ajax:
+            return jsonify({"ok": False, "message": "오류: " + str(e)}), 400
+        flash("오류가 발생했습니다.", "error")
+        return redirect(url_for("post_detail", id=id))
 
 # 댓글 삭제
 @app.post("/delete/<comment_id>/comment")
 @jwt_required()
 def comment_delete(comment_id):
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     try:
         cid = ObjectId(comment_id)
-    except Exception:
-        abort(404)
-    uid = ObjectId(get_jwt_identity())
-    # 삭제 전에 post_id를 미리 조회
-    comment = comments.find_one({"_id": cid, "user_id": uid})
-    post_id = comment.get("post_id") if comment else None
-    res = comments.delete_one({"_id": cid, "user_id": uid})
-    if res.deleted_count:
-        flash("댓글이 삭제되었습니다.", "success")
-    else:
-        flash("삭제할 수 없습니다.", "error")
-    if post_id:
-        return redirect(url_for("post_detail", id=str(post_id)))
-    return redirect(url_for("dashboard"))
+        uid = ObjectId(get_jwt_identity())
+        # 삭제 전에 post_id를 미리 조회
+        comment = comments.find_one({"_id": cid, "user_id": uid})
+        post_id = comment.get("post_id") if comment else None
+        res = comments.delete_one({"_id": cid, "user_id": uid})
+        if res.deleted_count:
+            msg = "댓글이 삭제되었습니다."
+            # AJAX: 삭제된 댓글 id, 베스트 댓글 영역 반환
+            if is_ajax and post_id:
+                # 베스트 댓글 영역 갱신
+                all_comments = list(comments.find({"post_id": post_id}))
+                comment_list = []
+                kst = ZoneInfo("Asia/Seoul")
+                for c in all_comments:
+                    user = users.find_one({"_id": c["user_id"]})
+                    dt = c["created_at"]
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    created_at_kst = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+                    comment_list.append({
+                        "id": str(c["_id"]),
+                        "user_id": str(c["user_id"]),
+                        "user_name": user["name"] if user else "알 수 없음",
+                        "content": c["content"],
+                        "created_at": created_at_kst,
+                        "like_count": len(c.get("likes", [])),
+                    })
+                best_comments = [c for c in comment_list if c["like_count"] > 0]
+                best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+                best_comments_html = render_template_string(
+                    '{% if best_comments and best_comments|length > 0 %}'
+                    '<div class="mb-6">'
+                    '  <h2 class="text-lg font-bold text-emerald-700 mb-2">베스트 댓글</h2>'
+                    '  <div class="space-y-2">'
+                    '    {% for c in best_comments %}'
+                    '    <div class="border rounded px-3 py-2 bg-yellow-50 flex justify-between items-center">'
+                    '      <div>'
+                    '        <span class="font-semibold">{{ c.user_name }}</span>'
+                    '        <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>'
+                    '        <div class="mt-1">{{ c.content }}</div>'
+                    '      </div>'
+                    '      <span class="text-emerald-600 font-bold text-sm">추천 수 {{ c.like_count }}</span>'
+                    '    </div>'
+                    '    {% endfor %}'
+                    '  </div>'
+                    '</div>'
+                    '{% endif %}',
+                    best_comments=best_comments
+                )
+                return jsonify({"ok": True, "comment_id": str(comment_id), "best_comments_html": best_comments_html, "message": msg})
+            flash(msg, "success")
+        else:
+            msg = "삭제할 수 없습니다."
+            if is_ajax:
+                return jsonify({"ok": False, "message": msg}), 400
+            flash(msg, "error")
+        if post_id:
+            return redirect(url_for("post_detail", id=str(post_id)))
+        return redirect(url_for("dashboard"))
+    except Exception as e:
+        if is_ajax:
+            return jsonify({"ok": False, "message": "오류: " + str(e)}), 400
+        flash("오류가 발생했습니다.", "error")
+        return redirect(url_for("dashboard"))
+
+#댓글 추천
+@app.post("/like/<comment_id>/comment")
+@jwt_required()
+def comment_like(comment_id):
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    try:
+        cid = ObjectId(comment_id)
+        uid = ObjectId(get_jwt_identity())
+        comment = comments.find_one({"_id": cid})
+        if not comment:
+            msg = "이미 삭제된 댓글입니다."
+            if is_ajax:
+                return jsonify({"ok": False, "message": msg}), 404
+            flash(msg, "error")
+            return redirect(url_for("dashboard"))
+        post_id = comment.get("post_id")
+        likes = comment.get("likes", [])
+        if isinstance(likes, int):
+            likes = []
+        if uid in likes:
+            comments.update_one({"_id": cid}, {"$pull": {"likes": uid}})
+            msg = "댓글 추천을 취소했습니다."
+        else:
+            comments.update_one({"_id": cid}, {"$push": {"likes": uid}})
+            msg = "댓글을 추천했습니다."
+        new_comment = comments.find_one({"_id": cid})
+        like_count = len(new_comment.get("likes", [])) if new_comment else 0
+        if is_ajax:
+            # --- 베스트 댓글 영역 동적 렌더링 ---
+            # 해당 포스트의 전체 댓글을 조회
+            all_comments = list(comments.find({"post_id": post_id}))
+            comment_list = []
+            kst = ZoneInfo("Asia/Seoul")
+            for c in all_comments:
+                user = users.find_one({"_id": c["user_id"]})
+                dt = c["created_at"]
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                created_at_kst = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+                comment_list.append({
+                    "id": str(c["_id"]),
+                    "user_id": str(c["user_id"]),
+                    "user_name": user["name"] if user else "알 수 없음",
+                    "content": c["content"],
+                    "created_at": created_at_kst,
+                    "like_count": len(c.get("likes", [])),
+                })
+            best_comments = [c for c in comment_list if c["like_count"] > 0]
+            best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+            # 베스트 댓글 영역만 렌더링 (템플릿 조각)
+            best_comments_html = render_template_string(
+                '{% if best_comments and best_comments|length > 0 %}'
+                '<div class="mb-6">'
+                '  <h2 class="text-lg font-bold text-emerald-700 mb-2">베스트 댓글</h2>'
+                '  <div class="space-y-2">'
+                '    {% for c in best_comments %}'
+                '    <div class="border rounded px-3 py-2 bg-yellow-50 flex justify-between items-center">'
+                '      <div>'
+                '        <span class="font-semibold">{{ c.user_name }}</span>'
+                '        <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>'
+                '        <div class="mt-1">{{ c.content }}</div>'
+                '      </div>'
+                '      <span class="text-emerald-600 font-bold text-sm">추천 수 {{ c.like_count }}</span>'
+                '    </div>'
+                '    {% endfor %}'
+                '  </div>'
+                '</div>'
+                '{% endif %}',
+                best_comments=best_comments
+            )
+            return jsonify({"ok": True, "like_count": like_count, "message": msg, "best_comments_html": best_comments_html})
+        flash(msg, "success")
+        if post_id:
+            return redirect(url_for("post_detail", id=str(post_id)))
+        return redirect(url_for("dashboard"))
+    except Exception as e:
+        if is_ajax:
+            return jsonify({"ok": False, "message": "오류: " + str(e)}), 400
+        flash("오류가 발생했습니다.", "error")
+        return redirect(url_for("dashboard"))
 
 @app.get("/api/preview-url")
 #@jwt_required()
