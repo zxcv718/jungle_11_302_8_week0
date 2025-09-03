@@ -8,6 +8,7 @@ from .blueprints.home import bp as home_bp
 from .blueprints.posts import bp as posts_bp
 from .blueprints.comments import bp as comments_bp
 from .blueprints.chat import bp as chat_bp
+from .blueprints.mypage import mypage_bp
 
 
 def create_app(config_object: str = "config.Config") -> Flask:
@@ -29,5 +30,6 @@ def create_app(config_object: str = "config.Config") -> Flask:
     app.register_blueprint(posts_bp)
     app.register_blueprint(comments_bp)
     app.register_blueprint(chat_bp)
+    app.register_blueprint(mypage_bp)
 
     return app
