@@ -1,27 +1,28 @@
 from pymongo import MongoClient
 from pymongo.errors import ConfigurationError
-
 client = None
+_db = None
+# Public alias so callers can use `mongo.db` (in addition to legacy `mongo._db`).
 db = None
-
-
 def init_mongo(app):
-    global client, db
+    global client, _db, db
     client = MongoClient(app.config["MONGO_URI"])  # SRV or standard URI
     try:
-        _db_temp = client.get_default_database()
+        db = client.get_default_database()
     except ConfigurationError:
-        _db_temp = None
-    db = _db_temp if _db_temp is not None else client["login"]
+        db = None
+    _db = db if db is not None else client["login"]
+    # Keep public alias in sync
+    globals()["db"] = _db
     # Expose collections on app.extensions for easy import until repos added
     app.extensions["mongo"] = {
         "client": client,
-        "db": db,
-        "users": db["users"],
-        "posts": db["posts"],
-        "comments": db["comments"],
-        "chat_rooms": db["chat_rooms"],
-        "chat_messages": db["chat_messages"],
+        "db": _db,
+        "users": _db["users"],
+        "posts": _db["posts"],
+        "comments": _db["comments"],
+        "chat_rooms": _db["chat_rooms"],
+        "chat_messages": _db["chat_messages"],
     }
     # Ensure indexes (best-effort)
     try:
@@ -31,5 +32,5 @@ def init_mongo(app):
         app.extensions["mongo"]["chat_rooms"].create_index([("category", 1), ("name", 1)])
         app.extensions["mongo"]["chat_messages"].create_index([("room_id", 1), ("created_at", -1)])
     except Exception:
-        # Don't crash if index creation fails (e.g., permissions)
+        # Don’t crash if index creation fails (e.g., permissions)
         pass

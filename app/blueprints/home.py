@@ -20,8 +20,7 @@ def root():
         identity = get_jwt_identity()
         if identity:
             uid = ObjectId(identity)
-            # 'users'를 'mongo.db.users'로 수정합니다.
-            current_user_doc = mongo.db.users.find_one({"_id": uid})
+            current_user_doc = mongo._db.users.find_one({"_id": uid})
             if current_user_doc:
                 jwt_data = get_jwt()
                 user_info = {
@@ -64,8 +63,7 @@ def root():
         {"$sort": {"like_count": -1, "created_at": -1}},
         {"$limit": 15} # 캐러셀(5) + 전체 글 목록(10)
     ]
-    # 'posts'를 'mongo.db.posts'로 수정합니다.
-    sorted_posts = [process_post_doc(doc) for doc in mongo.db.posts.aggregate(pipeline_all)]
+    sorted_posts = [process_post_doc(doc) for doc in mongo._db.posts.aggregate(pipeline_all)]
 
     # 캐러셀을 위한 인기글 Top 5
     popular_posts = sorted_posts[:5]
@@ -87,8 +85,7 @@ def root():
                     "like_count": {"$size": {"$ifNull": ["$likes", []]}}
                 }},
             ]
-            # 'posts'를 'mongo.db.posts'로 수정합니다.
-            subscribed_posts = [process_post_doc(doc) for doc in mongo.db.posts.aggregate(sub_pipeline)]
+            subscribed_posts = [process_post_doc(doc) for doc in mongo._db.posts.aggregate(sub_pipeline)]
 
     # 인기글에 대한 메타데이터(이미지)를 가져와 채워줍니다.
     for post in popular_posts:

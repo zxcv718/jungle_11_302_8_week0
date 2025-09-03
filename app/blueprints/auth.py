@@ -43,12 +43,12 @@ def register_post():
         flash("비밀번호가 일치하지 않습니다.", "error")
     return redirect(url_for("auth.register_get"))
 
-    if mongo.db.users.find_one({"email": email}):
+    if mongo._db.users.find_one({"email": email}):
         flash("이미 가입된 이메일입니다.", "error")
         return redirect(url_for("auth.register_get"))
 
     pw_hash = generate_password_hash(password)
-    mongo.db.users.insert_one(
+    mongo._db.users.insert_one(
         {"email": email, "name": name, "password": pw_hash, "created_at": datetime.now(timezone.utc), "liked_posts": [], "subscriptions": []}
     )
     flash("가입이 완료되었습니다. 로그인해주세요.", "success")
@@ -60,7 +60,7 @@ def api_check_email():
     email = request.args.get("email", "").strip().lower()
     if not email:
         return jsonify({"exists": False}), 200
-    exists = mongo.db["users"].find_one({"email": email}) is not None
+    exists = mongo._db["users"].find_one({"email": email}) is not None
     return jsonify({"exists": exists}), 200
 
 
@@ -80,7 +80,7 @@ def login_post():
     email = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
 
-    user = mongo.db.users.find_one({"email": email})
+    user = mongo._db.users.find_one({"email": email})
     if not user or not check_password_hash(user["password"], password):
         flash("이메일 또는 비밀번호가 올바르지 않습니다.", "error")
         return redirect(url_for("auth.login_get"))

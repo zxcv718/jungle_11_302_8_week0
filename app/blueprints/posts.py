@@ -35,7 +35,7 @@ def dashboard():
     name = jwt_data.get("name")
     user_id = ObjectId(identity)
     sort_spec = [("created_at", -1), ("_id", -1)]
-    cur = mongo.db["posts"].find({"user_id": user_id}).sort(sort_spec).limit(10)
+    cur = mongo._db["posts"].find({"user_id": user_id}).sort(sort_spec).limit(10)
     items = []
     kst = ZoneInfo("Asia/Seoul")
     for doc in cur:
@@ -95,7 +95,7 @@ def post_new_post():
         return redirect(url_for("post_new_get"))
     # Store created_at to comply with Atlas validator; avoid extra fields
     now_utc = datetime.now(timezone.utc)
-    mongo.db.posts.insert_one({
+    mongo._db.posts.insert_one({
         "user_id": user_id,
         "category": category,
         "title": title,
@@ -117,13 +117,13 @@ def post_detail(id):
     except Exception:
         abort(404)
 
-    doc = mongo.db.posts.find_one({"_id": oid})
+    doc = mongo._db.posts.find_one({"_id": oid})
     if not doc:
         flash("요청한 글을 찾을 수 없습니다.", "error")
         return redirect(url_for("home.root"))
 
     # 글 작성자 정보 조회
-    author = mongo.db.users.find_one({"_id": doc["user_id"]})
+    author = mongo._db.users.find_one({"_id": doc["user_id"]})
 
     # 현재 로그인 사용자 정보 및 상태
     current_user = None
@@ -132,7 +132,7 @@ def post_detail(id):
     identity = get_jwt_identity()
     if identity:
         uid = ObjectId(identity)
-        user_doc = mongo.db.users.find_one({"_id": uid})
+        user_doc = mongo._db.users.find_one({"_id": uid})
         if user_doc:
             jwt_data = get_jwt()
             current_user = {
@@ -165,11 +165,11 @@ def post_detail(id):
     url = doc.get("url") or ""
     meta = fetch_and_extract_metadata(url) if url else None
     
-    # 댓글 리스트: DB에서 해당 게시글의 댓글을 조회 (최신순)
-    comment_cur = mongo.db.comments.find({"post_id": oid}).sort("created_at", -1) 
+    # 댓글 리스트: _DB에서 해당 게시글의 댓글을 조회 (최신순)
+    comment_cur = mongo._db.comments.find({"post_id": oid}).sort("created_at", -1) 
     comment_list = []
     for c in comment_cur:
-        user = mongo.db.users.find_one({"_id": c["user_id"]})
+        user = mongo._db.users.find_one({"_id": c["user_id"]})
         dt = c["created_at"]
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -220,22 +220,22 @@ def post_like(id):
     except Exception:
         return jsonify({"ok": False, "message": "잘못된 요청입니다."}), 400
 
-    post = mongo.db.posts.find_one({"_id": oid})
+    post = mongo._db.posts.find_one({"_id": oid})
     if not post:
         return jsonify({"ok": False, "message": "글을 찾을 수 없습니다."}), 404
 
     if uid in post.get("likes", []):
         # Unlike
-        mongo.db.posts.update_one({"_id": oid}, {"$pull": {"likes": uid}})
-        mongo.db.users.update_one({"_id": uid}, {"$pull": {"liked_posts": oid}})
+        mongo._db.posts.update_one({"_id": oid}, {"$pull": {"likes": uid}})
+        mongo._db.users.update_one({"_id": uid}, {"$pull": {"liked_posts": oid}})
         action = "unliked"
     else:
         # Like
-        mongo.db.posts.update_one({"_id": oid}, {"$push": {"likes": uid}})
-        mongo.db.users.update_one({"_id": uid}, {"$push": {"liked_posts": oid}})
+        mongo._db.posts.update_one({"_id": oid}, {"$push": {"likes": uid}})
+        mongo._db.users.update_one({"_id": uid}, {"$push": {"liked_posts": oid}})
         action = "liked"
 
-    new_like_count = len(mongo.db.posts.find_one({"_id": oid}).get("likes", []))
+    new_like_count = len(mongo._db.posts.find_one({"_id": oid}).get("likes", []))
     return jsonify({"ok": True, "action": action, "like_count": new_like_count})
 
 @bp.post("/user/<id>/subscribe")
@@ -250,17 +250,17 @@ def user_subscribe(id):
     if author_id == subscriber_id:
         return jsonify({"ok": False, "message": "스스로를 구독할 수 없습니다."}), 400
 
-    subscriber = mongo.db.users.find_one({"_id": subscriber_id})
+    subscriber = mongo._db.users.find_one({"_id": subscriber_id})
     if not subscriber:
         return jsonify({"ok": False, "message": "사용자를 찾을 수 없습니다."}), 404
 
     if author_id in subscriber.get("subscriptions", []):
         # Unsubscribe
-        mongo.db.users.update_one({"_id": subscriber_id}, {"$pull": {"subscriptions": author_id}})
+        mongo._db.users.update_one({"_id": subscriber_id}, {"$pull": {"subscriptions": author_id}})
         action = "unsubscribed"
     else:
         # Subscribe
-        mongo.db.users.update_one({"_id": subscriber_id}, {"$push": {"subscriptions": author_id}})
+        mongo._db.users.update_one({"_id": subscriber_id}, {"$push": {"subscriptions": author_id}})
         action = "subscribed"
 
     return jsonify({"ok": True, "action": action})
@@ -273,7 +273,7 @@ def post_edit_get(id):
     except Exception:
         return redirect(url_for("posts.dashboard"))
     uid = ObjectId(get_jwt_identity())
-    doc = mongo.db["posts"].find_one({"_id": oid, "user_id": uid})
+    doc = mongo._db["posts"].find_one({"_id": oid, "user_id": uid})
     if not doc:
         flash("요청한 글을 찾을 수 없습니다.", "error")
         return redirect(url_for("posts.dashboard"))
@@ -296,7 +296,7 @@ def post_edit_post(id):
     except Exception:
         return redirect(url_for("posts.dashboard"))
     uid = ObjectId(get_jwt_identity())
-    doc = mongo.db["posts"].find_one({"_id": oid, "user_id": uid})
+    doc = mongo._db["posts"].find_one({"_id": oid, "user_id": uid})
     if not doc:
         return redirect(url_for("posts.dashboard"))
     category = request.form.get("category", "")
@@ -313,7 +313,7 @@ def post_edit_post(id):
     except Exception:
         flash("유효한 URL을 입력하세요.", "error")
         return redirect(url_for("posts.post_edit_get", id=id))
-    mongo.db["posts"].update_one({"_id": oid, "user_id": uid},{"$set": {
+    mongo._db["posts"].update_one({"_id": oid, "user_id": uid},{"$set": {
         "category": category,
         "title": title,
         "url": url,
@@ -331,7 +331,7 @@ def post_delete(id):
     except Exception:
         return redirect(url_for("posts.dashboard"))
     uid = ObjectId(get_jwt_identity())
-    res = mongo.db["posts"].delete_one({"_id": oid, "user_id": uid})
+    res = mongo._db["posts"].delete_one({"_id": oid, "user_id": uid})
     if res.deleted_count:
         flash("삭제되었습니다.", "success")
     else:
@@ -364,7 +364,7 @@ def api_my_posts():
 
     sort_spec = [("created_at", -1 if sort == "new" else 1), ("_id", -1 if sort == "new" else 1)]
     skip = (page - 1) * limit
-    cur = mongo.db["posts"].find(filt).sort(sort_spec).skip(skip).limit(limit)
+    cur = mongo._db["posts"].find(filt).sort(sort_spec).skip(skip).limit(limit)
     items = []
     kst = ZoneInfo("Asia/Seoul")
     for doc in cur:
@@ -410,7 +410,7 @@ def api_posts():
             pass
     sort_spec = [("created_at", -1), ("_id", -1)]
     skip = (page - 1) * limit
-    cur = mongo.db["posts"].find(filt).sort(sort_spec).skip(skip).limit(limit)
+    cur = mongo._db["posts"].find(filt).sort(sort_spec).skip(skip).limit(limit)
     items = []
     kst = ZoneInfo("Asia/Seoul")
     for doc in cur:
