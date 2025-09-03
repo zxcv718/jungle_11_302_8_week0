@@ -12,10 +12,54 @@ from flask_jwt_extended import (
     set_refresh_cookies,
     unset_jwt_cookies,
 )
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from ..extensions import mongo
+from ..extensions.mail import mail
+from flask_mail import Message
+import random
+import string
 
 bp = Blueprint("auth", __name__)
+
+
+def send_verification_email(email, code):
+    msg = Message("JStory 회원가입 인증 코드",
+                  sender=("JStory", "no-reply@jstory.com"),
+                  recipients=[email])
+    msg.body = f"인증 코드를 입력해주세요: {code}"
+    try:
+        mail.send(msg)
+        return True
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+        return False
+
+
+@bp.route("/api/send-verification-code", methods=["POST"])
+def send_verification_code():
+    email = request.json.get("email", "").strip().lower()
+    if not email:
+        return jsonify({"error": "이메일을 입력하세요."}), 400
+
+    if mongo._db.users.find_one({"email": email}):
+        return jsonify({"error": "이미 가입된 이메일입니다."}), 409
+
+    code = "".join(random.choices(string.digits, k=6))
+    
+    # 이전 인증 코드 삭제
+    mongo._db.verifications.delete_one({"email": email})
+    
+    # 새 인증 코드 저장 (10분 유효)
+    mongo._db.verifications.insert_one({
+        "email": email,
+        "code": code,
+        "created_at": datetime.now(timezone.utc)
+    })
+
+    if send_verification_email(email, code):
+        return jsonify({"message": "인증 코드를 발송했습니다."}), 200
+    else:
+        return jsonify({"error": "인증 코드 발송에 실패했습니다."}), 500
 
 
 @bp.get("/register")
@@ -35,22 +79,41 @@ def register_post():
     name = request.form.get("name", "").strip()
     password = request.form.get("password", "")
     password_confirm = request.form.get("password_confirm", "")
+    verification_code = request.form.get("verification_code", "").strip()
 
-    if not email or not name or not password or not password_confirm:
+    if not all([email, name, password, password_confirm, verification_code]):
         flash("모든 필드를 입력하세요.", "error")
-    return redirect(url_for("auth.register_get"))
+        return redirect(url_for("auth.register_get"))
+
     if password != password_confirm:
         flash("비밀번호가 일치하지 않습니다.", "error")
-    return redirect(url_for("auth.register_get"))
+        return redirect(url_for("auth.register_get"))
 
     if mongo._db.users.find_one({"email": email}):
         flash("이미 가입된 이메일입니다.", "error")
+        return redirect(url_for("auth.register_get"))
+
+    # 인증 코드 확인
+    verification_doc = mongo._db.verifications.find_one({"email": email, "code": verification_code})
+    if not verification_doc:
+        flash("인증 코드가 올바르지 않습니다.", "error")
+        return redirect(url_for("auth.register_get"))
+
+    # 10분 유효시간 체크
+    verification_created_at = verification_doc["created_at"].replace(tzinfo=timezone.utc)
+    ten_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=10)
+    if verification_created_at < ten_minutes_ago:
+        flash("인증 코드가 만료되었습니다. 다시 시도해주세요.", "error")
         return redirect(url_for("auth.register_get"))
 
     pw_hash = generate_password_hash(password)
     mongo._db.users.insert_one(
         {"email": email, "name": name, "password": pw_hash, "created_at": datetime.now(timezone.utc), "liked_posts": [], "subscriptions": []}
     )
+    
+    # 사용된 인증 코드 삭제
+    mongo._db.verifications.delete_one({"email": email})
+
     flash("가입이 완료되었습니다. 로그인해주세요.", "success")
     return redirect(url_for("auth.login_get"))
 

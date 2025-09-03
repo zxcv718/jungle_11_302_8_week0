@@ -9,11 +9,19 @@
   </div>
   <div>
     <label class="block text-sm">이메일</label>
-    <div class="relative">
-      <input id="email" type="email" name="email" required class="w-full border rounded px-3 py-2 pr-24" />
-      <span id="emailStatus" class="absolute right-2 top-2 text-sm"></span>
+    <div class="flex items-center space-x-2">
+      <input id="email" type="email" name="email" required class="flex-grow border rounded px-3 py-2" placeholder="이메일 주소" />
+      <button type="button" id="sendCodeBtn" class="bg-gray-200 text-gray-700 px-4 py-2 rounded text-sm whitespace-nowrap">인증번호 발송</button>
     </div>
-    <p id="emailHelp" class="text-xs text-gray-500 mt-1">이메일 형식 확인 및 중복 여부를 검사합니다.</p>
+    <p id="emailHelp" class="text-xs text-gray-500 mt-1"></p>
+  </div>
+  <div id="verificationCodeGroup" class="hidden">
+    <label class="block text-sm">인증코드</label>
+    <div class="flex items-center space-x-2">
+      <input id="verificationCode" type="text" name="verification_code" class="flex-grow border rounded px-3 py-2" placeholder="6자리 숫자" />
+      <span id="timer" class="text-sm text-red-500"></span>
+    </div>
+    <p id="verificationHelp" class="text-xs text-gray-500 mt-1"></p>
   </div>
   <div>
     <label class="block text-sm">비밀번호</label>
@@ -32,43 +40,101 @@
 </div>
 
 <script>
-  const email = document.getElementById('email');
+  const emailInput = document.getElementById('email');
   const nameInput = document.getElementById('name');
   const pw = document.getElementById('password');
   const pw2 = document.getElementById('password_confirm');
-  const emailStatus = document.getElementById('emailStatus');
   const pwMatch = document.getElementById('pwMatch');
   const submitBtn = document.getElementById('submitBtn');
+  const sendCodeBtn = document.getElementById('sendCodeBtn');
+  const emailHelp = document.getElementById('emailHelp');
+  const verificationCodeGroup = document.getElementById('verificationCodeGroup');
+  const verificationCodeInput = document.getElementById('verificationCode');
+  const verificationHelp = document.getElementById('verificationHelp');
+  const timerSpan = document.getElementById('timer');
 
   let emailOk = false;
   let pwOk = false;
+  let verificationCodeOk = false;
+  let timerInterval;
 
-  async function checkEmailDuplication(value) {
-    if (!value || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      emailStatus.textContent = '';
-      emailOk = false;
-      updateSubmitState();
+  function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  }
+
+  function updateSubmitState() {
+    const nameOk = !!nameInput.value.trim();
+    const allOk = nameOk && emailOk && pwOk && verificationCodeOk;
+    submitBtn.disabled = !allOk;
+    submitBtn.className = 'w-full bg-emerald-600 text-white py-2 rounded ' + (allOk ? '' : 'opacity-50 cursor-not-allowed');
+  }
+
+  sendCodeBtn.addEventListener('click', async () => {
+    const email = emailInput.value.trim();
+    if (!isValidEmail(email)) {
+      emailHelp.textContent = '올바른 이메일 형식이 아닙니다.';
+      emailHelp.className = 'text-xs text-red-600 mt-1';
       return;
     }
-    emailStatus.textContent = '확인 중...';
+
+    sendCodeBtn.disabled = true;
+    sendCodeBtn.textContent = '전송 중...';
+    emailHelp.textContent = '';
+
     try {
-  const res = await fetch(`{{ url_for('auth.api_check_email') }}?email=${encodeURIComponent(value)}`);
+      const res = await fetch('{{ url_for("auth.send_verification_code") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email })
+      });
       const data = await res.json();
-      if (data.exists) {
-        emailStatus.textContent = '이미 사용 중';
-        emailStatus.className = 'absolute right-2 top-2 text-xs text-red-600';
-        emailOk = false;
-      } else {
-        emailStatus.textContent = '사용 가능';
-        emailStatus.className = 'absolute right-2 top-2 text-xs text-green-600';
+
+      if (res.ok) {
+        emailHelp.textContent = '인증 코드를 발송했습니다. 이메일을 확인해주세요.';
+        emailHelp.className = 'text-xs text-green-600 mt-1';
+        verificationCodeGroup.classList.remove('hidden');
+        emailInput.readOnly = true;
         emailOk = true;
+        startTimer(600); // 10분 타이머
+      } else {
+        emailHelp.textContent = data.error || '오류가 발생했습니다.';
+        emailHelp.className = 'text-xs text-red-600 mt-1';
+        sendCodeBtn.disabled = false;
+        sendCodeBtn.textContent = '인증번호 발송';
       }
     } catch (e) {
-      emailStatus.textContent = '오류';
-      emailStatus.className = 'absolute right-2 top-2 text-xs text-red-600';
-      emailOk = false;
+      emailHelp.textContent = '네트워크 오류가 발생했습니다.';
+      emailHelp.className = 'text-xs text-red-600 mt-1';
+      sendCodeBtn.disabled = false;
+      sendCodeBtn.textContent = '인증번호 발송';
     }
     updateSubmitState();
+  });
+
+  function startTimer(duration) {
+    let timer = duration, minutes, seconds;
+    clearInterval(timerInterval);
+    timerInterval = setInterval(function () {
+      minutes = parseInt(timer / 60, 10);
+      seconds = parseInt(timer % 60, 10);
+
+      minutes = minutes < 10 ? "0" + minutes : minutes;
+      seconds = seconds < 10 ? "0" + seconds : seconds;
+
+      timerSpan.textContent = minutes + ":" + seconds;
+
+      if (--timer < 0) {
+        clearInterval(timerInterval);
+        timerSpan.textContent = "만료";
+        emailHelp.textContent = '인증 시간이 만료되었습니다. 다시 시도해주세요.';
+        emailHelp.className = 'text-xs text-red-600 mt-1';
+        sendCodeBtn.disabled = false;
+        sendCodeBtn.textContent = '인증번호 재발송';
+        emailInput.readOnly = false;
+        emailOk = false;
+        updateSubmitState();
+      }
+    }, 1000);
   }
 
   function validatePasswords() {
@@ -94,22 +160,18 @@
     updateSubmitState();
   }
 
-  function updateSubmitState() {
-    const nameOk = !!nameInput.value.trim();
-    const allOk = nameOk && emailOk && pwOk;
-    submitBtn.disabled = !allOk;
-    submitBtn.className = 'w-full bg-emerald-600 text-white py-2 rounded ' + (allOk ? '' : 'opacity-50 cursor-not-allowed');
-  }
-
-  email.addEventListener('input', (e) => {
-    const value = e.target.value.trim();
-    // 디바운스 간단 처리
-    clearTimeout(email._t);
-    email._t = setTimeout(() => checkEmailDuplication(value), 300);
+  verificationCodeInput.addEventListener('input', () => {
+    verificationCodeOk = verificationCodeInput.value.trim().length === 6;
+    updateSubmitState();
   });
+
   pw.addEventListener('input', validatePasswords);
   pw2.addEventListener('input', validatePasswords);
   nameInput.addEventListener('input', updateSubmitState);
+  emailInput.addEventListener('input', () => {
+    emailOk = false;
+    updateSubmitState();
+  });
 
   // 초기 상태 설정
   updateSubmitState();
