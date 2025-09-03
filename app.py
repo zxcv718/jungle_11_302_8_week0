@@ -55,6 +55,7 @@ except Exception as e:
 
 @app.get("/")
 def root():
+    return render_template("home.html")
     # Redirect root to dashboard if logged-in, otherwise login page
     try:
         verify_jwt_in_request(optional=True)
@@ -215,6 +216,65 @@ def api_my_posts():
 
     return jsonify({"items": items, "page": page, "limit": limit})
 
+
+@app.get("/api/posts")
+def api_posts():
+    # Params
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    try:
+        limit = min(50, max(1, int(request.args.get("limit", 10))))
+    except ValueError:
+        limit = 10
+    
+    exclude_ids_str = request.args.get("exclude", "")
+    
+    filt = {}
+    if exclude_ids_str:
+        try:
+            exclude_ids = [ObjectId(id_str) for id_str in exclude_ids_str.split(',') if id_str]
+            if exclude_ids:
+                filt["_id"] = {"$nin": exclude_ids}
+        except Exception:
+            pass # Ignore invalid IDs
+
+    sort_spec = [("created_at", -1), ("_id", -1)]  # Sort by newest
+    skip = (page - 1) * limit
+
+    cur = posts.find(filt).sort(sort_spec).skip(skip).limit(limit)
+    items = []
+    kst = ZoneInfo("Asia/Seoul")
+    for doc in cur:
+        # Build KST datetime robustly
+        date_iso = None
+        date_text = None
+        dt = doc.get("created_at")
+        if isinstance(dt, datetime):
+            # Treat naive as UTC (legacy data)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            kst_dt = dt.astimezone(kst)
+            date_iso = kst_dt.isoformat()
+            date_text = kst_dt.strftime("%Y-%m-%d %H:%M")
+        else:
+            # No datetime available
+            date_iso = None
+            date_text = None
+
+        items.append({
+            "id": str(doc.get("_id")),
+            "category": doc.get("category"),
+            "title": doc.get("title", ""),
+            "url": doc.get("url", ""),
+            "contents": doc.get("contents", ""),
+            "date": date_iso,
+            "date_text": date_text,
+            "meta": doc.get("meta", {}),
+        })
+
+    return jsonify({"items": items, "page": page, "limit": limit})
 
 @app.get("/post/new")
 @jwt_required()
@@ -453,7 +513,7 @@ def comment_delete(comment_id):
     return redirect(url_for("dashboard"))
 
 @app.get("/api/preview-url")
-@jwt_required()
+#@jwt_required()
 def api_preview_url():
     """Validate URL using metadata module (requests+bs4) for permissive preview.
     Returns JSON: {ok, title, description, image, url, content_type}.
