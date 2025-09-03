@@ -50,5 +50,37 @@
       <button class="px-3 py-2 bg-red-600 text-white rounded text-sm">삭제</button>
     </form>
   </div>
+  
+  <!-- 댓글 영역 시작 -->
+  <div class="mt-8">
+    <h2 class="text-lg font-semibold mb-3">댓글</h2>
+    <!-- 댓글 작성 폼 (로그인 사용자만) -->
+    {% if current_user %}
+    <form id="commentForm" action="{{ url_for('post_comments', id=post.id) }}" method="post" class="flex gap-2 mb-4">
+      <input type="text" name="content" required maxlength="200" placeholder="댓글을 입력하세요" class="flex-1 border rounded px-3 py-2" />
+      <button type="submit" class="bg-emerald-600 text-white px-4 py-2 rounded">등록</button>
+    </form>
+    {% endif %}
+    <!-- 댓글 리스트 -->
+    <div id="commentList" class="space-y-3">
+      {% for c in comments %}
+      <div class="border rounded px-3 py-2 bg-white flex justify-between items-center">
+        <div>
+          <span class="font-semibold">{{ c.user_name }}</span>
+          <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>
+          <div class="mt-1">{{ c.content }}</div>
+        </div>
+        {% if current_user and c.user_id == current_user.id %}
+        <form action="{{ url_for('comment_delete', comment_id=c.id) }}" method="post" onsubmit="return confirm('댓글을 삭제하시겠습니까?');">
+          <button class="text-red-600 text-xs px-2 py-1 rounded">삭제</button>
+        </form>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="text-gray-500">아직 댓글이 없습니다.</div>
+      {% endfor %}
+    </div>
+  </div>
+  <!-- 댓글 영역 끝 -->
 </div>
 {% endblock %}
