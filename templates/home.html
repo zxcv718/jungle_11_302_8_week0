@@ -3,7 +3,7 @@
 
 <!-- Post Carousel Section -->
 <section class="mt-4">
-  <div class="max-w-2xl">
+  <div class="max-w-lg">
     <h2 class="text-xl font-semibold mb-4">인기 글</h2>
     <div id="carousel-container" class="relative bg-white rounded-lg border shadow-sm overflow-hidden">
       <!-- Carousel slides -->
@@ -32,9 +32,19 @@
     <h1 class="text-2xl font-bold">전체 글 목록</h1>
   </div>
 
-  <div id="list" class="mt-4 space-y-4 max-w-4xl mx-auto"></div>
-  <div id="empty" class="mt-8 text-center text-gray-500 hidden">작성된 글이 없습니다.</div>
-  <div id="sentinel" class="h-8"></div>
+  <div class="mt-4 space-y-4 max-w-lg">
+    {% if posts %}
+      {% for post in posts %}
+        <a href="{{ url_for('post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
+          <div class="text-sm text-gray-500 mb-1">{{ post.category or '' }} · {{ post.date_text or '' }}</div>
+          <div class="font-semibold text-gray-900 line-clamp-1">{{ post.title or '' }}</div>
+          <div class="text-gray-700 mt-1 line-clamp-2">{{ post.contents or '' }}</div>
+        </a>
+      {% endfor %}
+    {% else %}
+      <div class="mt-8 text-center text-gray-500">작성된 글이 없습니다.</div>
+    {% endif %}
+  </div>
 </section>
 
 <script>
@@ -44,10 +54,7 @@
   const carouselNext = document.getElementById('carousel-next');
   const carouselIndicators = document.getElementById('carousel-indicators');
 
-  // Post list elements
-  const listEl = document.getElementById('list');
-  const emptyEl = document.getElementById('empty');
-  const sentinel = document.getElementById('sentinel');
+
   const loginUrl = "{{ url_for('login_get') }}";
   const refreshUrl = "{{ url_for('refresh') }}";
 
@@ -58,12 +65,7 @@
     currentIndex: 0,
   };
 
-  let listState = {
-    page: 1,
-    limit: 10,
-    loading: false,
-    done: false,
-  };
+
 
   // --- Carousel Logic ---
   function renderCarousel() {
@@ -83,7 +85,7 @@
       
       // a 태그에 relative를 주어 자식 요소의 absolute 포지셔닝 기준으로 만듭니다.
       slide.innerHTML = `
-        <a href="/post/${post.id}" class="block relative h-64 bg-gray-200 text-white">
+        <a href="/post/${post.id}" class="block relative h-72 bg-gray-200 text-white">
           
           <!-- 이미지가 채워질 배경 div -->
           <div id="preview-${post.id}" class="w-full h-full"></div>
@@ -126,6 +128,7 @@
     });
     updateCarousel();
   }
+
 
   function updateCarousel() {
     const slides = carouselSlides.querySelectorAll('.w-full');
@@ -188,72 +191,7 @@
     }
   }
 
-  // --- Post List Logic ---
-  function renderItems(items) {
-    if (listState.page === 1) listEl.innerHTML = '';
-    for (const it of items) {
-      const el = document.createElement('a');
-      el.href = `{{ url_for('post_detail', id='__ID__') }}`.replace('__ID__', it.id);
-      el.target = '_self';
-      el.className = 'block p-4 bg-white rounded border hover:bg-gray-50';
-      el.innerHTML = `
-        <div class="text-sm text-gray-500 mb-1">${it.category || ''} · ${it.date_text || ''}</div>
-        <div class="font-semibold text-gray-900 line-clamp-1">${it.title || ''}</div>
-        <div class="text-gray-700 mt-1 line-clamp-2">${it.contents || ''}</div>
-      `;
-      listEl.appendChild(el);
-    }
-  }
 
-    async function fetchPage() {
-    if (listState.loading || listState.done) return;
-    listState.loading = true;
-
-    const params = new URLSearchParams({
-      page: listState.page,
-      limit: listState.limit,
-    });
-
-    // Exclude carousel post IDs from the main list
-    if (carouselState.posts.length > 0) {
-        const excludeIds = carouselState.posts.map(p => p.id).join(',');
-        params.append('exclude', excludeIds);
-    }
-
-    let data;
-    try {
-      const res = await fetchWithAutoRefresh(`{{ url_for('api_posts') }}?` + params.toString());
-      if (!res.ok) {
-        listState.loading = false;
-        return;
-      }
-      data = await res.json();
-    } catch (err) {
-      console.error('Fetch error:', err);
-      listState.loading = false;
-      return;
-    }
-
-    const items = data.items || [];
-    if (listState.page === 1 && items.length === 0) {
-      emptyEl.classList.remove('hidden');
-    } else {
-      emptyEl.classList.add('hidden');
-    }
-
-    renderItems(items);
-    if (items.length < listState.limit) listState.done = true;
-    listState.page += 1;
-    listState.loading = false;
-  }
-
-  const io = new IntersectionObserver((entries) => {
-    entries.forEach(e => {
-      if (e.isIntersecting) {
-        fetchPage();
-      }
-    })
-  });
 
   async function fetchWithAutoRefresh(url, options={}) {
     const res = await fetch(url, { credentials: 'same-origin', ...options });
@@ -285,12 +223,6 @@
   document.addEventListener('DOMContentLoaded', async () => {
     // 1. 캐러셀 게시물을 먼저 가져옵니다.
     await fetchCarouselPosts();
-    
-    // 2. 캐러셀 게시물을 제외하고 첫 페이지 목록을 가져옵니다.
-    await fetchPage();
-
-    // 3. 초기 로드가 모두 끝난 후, 무한 스크롤 감시를 시작합니다.
-    io.observe(sentinel);
   });
 </script>
 {% endblock %}
