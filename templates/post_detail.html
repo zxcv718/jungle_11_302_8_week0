@@ -73,9 +73,9 @@
   </div>
 
   <div class="flex gap-2">
-    <a href="{{ url_for('dashboard') }}" class="px-3 py-2 bg-gray-200 text-gray-800 rounded text-sm">목록</a>
-    <a href="{{ url_for('post_edit_get', id=post.id) }}" class="px-3 py-2 bg-blue-600 text-white rounded text-sm">수정</a>
-    <form action="{{ url_for('post_delete', id=post.id) }}" method="post" onsubmit="return confirm('삭제하시겠습니까?');">
+  <a href="{{ url_for('posts.dashboard') }}" class="px-3 py-2 bg-gray-200 text-gray-800 rounded text-sm">목록</a>
+  <a href="{{ url_for('posts.post_edit_get', id=post.id) }}" class="px-3 py-2 bg-blue-600 text-white rounded text-sm">수정</a>
+  <form action="{{ url_for('posts.post_delete', id=post.id) }}" method="post" onsubmit="return confirm('삭제하시겠습니까?');">
       <button class="px-3 py-2 bg-red-600 text-white rounded text-sm">삭제</button>
     </form>
   </div>
@@ -104,7 +104,7 @@
     <h2 class="text-lg font-semibold mb-3">댓글</h2>
     <!-- 댓글 작성 폼 (로그인 사용자만) -->
     {% if current_user %}
-    <form id="commentForm" action="{{ url_for('post_comments', id=post.id) }}" method="post" class="flex gap-2 mb-4">
+  <form id="commentForm" action="{{ url_for('comments.post_comments', id=post.id) }}" method="post" class="flex gap-2 mb-4">
       <input type="text" name="content" required maxlength="200" placeholder="댓글을 입력하세요" class="flex-1 border rounded px-3 py-2" />
       <button type="submit" class="bg-emerald-600 text-white px-4 py-2 rounded">등록</button>
     </form>
@@ -127,7 +127,7 @@
           <span class="ml-1 text-xs text-gray-700" id="like-count-{{ c.id }}">{{ c.like_count or 0 }}</span>
         </div>
         {% if current_user and c.user_id == current_user.id %}
-        <form action="{{ url_for('comment_delete', comment_id=c.id) }}" method="post">
+  <form action="{{ url_for('comments.comment_delete', comment_id=c.id) }}" method="post">
           <button class="text-red-600 text-xs px-2 py-1 rounded">삭제</button>
         </form>
         {% endif %}

@@ -18,17 +18,17 @@
     {% if not hide_top_nav %}
     <nav class="bg-white border-b">
       <div class="max-w-3xl mx-auto px-4 py-3 flex justify-between items-center">
-        <a href="{{ url_for('root') }}" class="font-semibold">JStory</a>
+  <a href="{{ url_for('home.root') }}" class="font-semibold">JStory</a>
         <div class="space-x-3 flex items-center">
           {% if user_info %}
             <span class="text-sm text-gray-600">{{ user_info.name }}님</span>
-            <a href="{{ url_for('dashboard') }}" class="text-sm text-gray-600 hover:text-gray-900">대시보드</a>
-            <form action="{{ url_for('logout') }}" method="post" class="inline">
+            <a href="{{ url_for('posts.dashboard') }}" class="text-sm text-gray-600 hover:text-gray-900">대시보드</a>
+            <form action="{{ url_for('auth.logout') }}" method="post" class="inline">
               <button type="submit" class="text-sm text-gray-600 hover:text-gray-900 p-0 border-0 bg-transparent cursor-pointer">로그아웃</button>
             </form>
           {% else %}
-            <a href="{{ url_for('login_get') }}" class="text-sm text-gray-600 hover:text-gray-900">로그인</a>
-            <a href="{{ url_for('register_get') }}" class="text-sm text-gray-600 hover:text-gray-900">회원가입</a>
+            <a href="{{ url_for('auth.login_get') }}" class="text-sm text-gray-600 hover:text-gray-900">로그인</a>
+            <a href="{{ url_for('auth.register_get') }}" class="text-sm text-gray-600 hover:text-gray-900">회원가입</a>
           {% endif %}
         </div>
       </div>

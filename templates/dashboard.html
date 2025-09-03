@@ -15,9 +15,9 @@
   <div class="flex items-center justify-between py-4 max-w-4xl mx-auto">
     <div class="text-2xl font-bold">{{ name }}의 블로그</div>
     <div class="flex items-center gap-3">
-  <a href="{{ url_for('chat_home') }}" class="px-3 py-2 bg-green-600 text-white rounded text-sm">채팅</a>
-      <a href="{{ url_for('post_new_get') }}" class="px-3 py-2 bg-blue-600 text-white rounded text-sm">글 작성</a>
-      <form action="{{ url_for('logout') }}" method="post">
+  <a href="{{ url_for('chat.chat_home') }}" class="px-3 py-2 bg-green-600 text-white rounded text-sm">채팅</a>
+      <a href="{{ url_for('posts.post_new_get') }}" class="px-3 py-2 bg-blue-600 text-white rounded text-sm">글 작성</a>
+      <form action="{{ url_for('auth.logout') }}" method="post">
         <button class="px-3 py-2 bg-gray-800 text-white rounded text-sm">로그아웃</button>
       </form>
     </div>
@@ -57,7 +57,7 @@
     <div id="list" class="space-y-4">
       {% if initial_items %}
         {% for it in initial_items %}
-          <a href="{{ url_for('post_detail', id=it.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
+          <a href="{{ url_for('posts.post_detail', id=it.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
             <div class="flex gap-3 items-start">
               <div class="flex-1 min-w-0">
                 <div class="text-sm text-gray-500 mb-1">{{ it.category or '' }} · {{ it.date_text or '' }}</div>
@@ -94,8 +94,8 @@
   const searchBox = document.getElementById('searchBox');
   const searchInput = document.getElementById('searchInput');
   const searchClear = document.getElementById('searchClear');
-  const loginUrl = "{{ url_for('login_get') }}";
-  const refreshUrl = "{{ url_for('refresh') }}";
+  const loginUrl = "{{ url_for('auth.login_get') }}";
+  const refreshUrl = "{{ url_for('auth.refresh') }}";
   const initialPage = Number("{{ 2 if initial_items else 1 }}");
 
   let state = {
@@ -242,7 +242,7 @@
   // Preview with editor effects, excluding non-text like URLs/images
   const previewHTML = renderPreviewHTML(md, state.q);
   const el = document.createElement('a');
-  el.href = `{{ url_for('post_detail', id='__ID__') }}`.replace('__ID__', it.id);
+  el.href = `{{ url_for('posts.post_detail', id='__ID__') }}`.replace('__ID__', it.id);
   el.target = '_self';
       el.className = 'block p-4 bg-white rounded border hover:bg-gray-50';
       el.innerHTML = `
@@ -285,7 +285,7 @@
     });
     let data;
     try {
-      const res = await fetchWithAutoRefresh(`{{ url_for('api_my_posts') }}?` + params.toString(), { signal: controller.signal });
+  const res = await fetchWithAutoRefresh(`{{ url_for('posts.api_my_posts') }}?` + params.toString(), { signal: controller.signal });
       if (!res.ok) { state.loading = false; return; }
       data = await res.json();
     } catch (err) {

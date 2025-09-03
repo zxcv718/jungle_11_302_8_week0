@@ -35,7 +35,7 @@
   <div class="mt-4 space-y-4 max-w-lg">
     {% if posts %}
       {% for post in posts %}
-        <a href="{{ url_for('post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
+  <a href="{{ url_for('posts.post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
           <div class="text-sm text-gray-500 mb-1">{{ post.category or '' }} · {{ post.date_text or '' }}</div>
           <div class="font-semibold text-gray-900 line-clamp-1">{{ post.title or '' }}</div>
           <div class="text-gray-700 mt-1 line-clamp-2">{{ post.contents or '' }}</div>
@@ -55,8 +55,8 @@
   const carouselIndicators = document.getElementById('carousel-indicators');
 
 
-  const loginUrl = "{{ url_for('login_get') }}";
-  const refreshUrl = "{{ url_for('refresh') }}";
+  const loginUrl = "{{ url_for('auth.login_get') }}";
+  const refreshUrl = "{{ url_for('auth.refresh') }}";
 
   let carouselInterval = null;
 
@@ -101,7 +101,7 @@
 
       // 2. URL이 있으면, 해당 URL로 미리보기 API를 호출합니다.
       if (post.url) {
-        fetch(`{{ url_for('api_preview_url') }}?url=${encodeURIComponent(post.url)}`)
+  fetch(`{{ url_for('posts.api_preview_url') }}?url=${encodeURIComponent(post.url)}`)
           .then(res => res.ok ? res.json() : Promise.reject('API call failed'))
           .then(meta => {
             const previewContainer = document.getElementById(`preview-${post.id}`);
@@ -176,7 +176,7 @@
   async function fetchCarouselPosts() {
     const params = new URLSearchParams({ page: 1, limit: 5 }); // Fetch 5 latest posts for carousel
     try {
-      const res = await fetch(`{{ url_for('api_posts') }}?` + params.toString());
+  const res = await fetch(`{{ url_for('posts.api_posts') }}?` + params.toString());
       if (!res.ok) return;
       const data = await res.json();
       carouselState.posts = data.items || [];
