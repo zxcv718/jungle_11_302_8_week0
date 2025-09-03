@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, request
 import os
 from .extensions.socketio import socketio
 from .extensions.jwt import jwt
@@ -9,6 +9,7 @@ from .blueprints.home import bp as home_bp
 from .blueprints.posts import bp as posts_bp
 from .blueprints.comments import bp as comments_bp
 from .blueprints.chat import bp as chat_bp
+from .blueprints.notifications import bp as notifications_bp
 from .blueprints.mypage import mypage_bp
 
 
@@ -33,5 +34,21 @@ def create_app(config_object: str = "config.Config") -> Flask:
     app.register_blueprint(comments_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(mypage_bp)
+    app.register_blueprint(notifications_bp)
+
+    # Prevent caching of dynamic pages so back button doesn't reveal protected content after logout
+    @app.after_request
+    def add_no_cache_headers(resp):
+        try:
+            p = request.path or ""
+            # allow static assets to be cached normally
+            if p.startswith("/static/"):
+                return resp
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0, private"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+        except Exception:
+            pass
+        return resp
 
     return app

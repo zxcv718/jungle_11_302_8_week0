@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, abort
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt, verify_jwt_in_request
 from bson import ObjectId
 from datetime import datetime, timezone
@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import os
 
 from metadata import fetch_and_extract_metadata, normalize_url
+from ..services.notifications import create_notification
 
 bp = Blueprint("posts", __name__)
 
@@ -234,6 +235,13 @@ def post_like(id):
         mongo._db.posts.update_one({"_id": oid}, {"$push": {"likes": uid}})
         mongo._db.users.update_one({"_id": uid}, {"$push": {"liked_posts": oid}})
         action = "liked"
+        # Notify post owner if someone else liked their post
+        try:
+            owner_id = post.get("user_id")
+            if owner_id and owner_id != uid:
+                create_notification(recipient_id=owner_id, ntype="post_like", actor_id=uid, post_id=oid)
+        except Exception:
+            pass
 
     new_like_count = len(mongo._db.posts.find_one({"_id": oid}).get("likes", []))
     return jsonify({"ok": True, "action": action, "like_count": new_like_count})
@@ -262,6 +270,11 @@ def user_subscribe(id):
         # Subscribe
         mongo._db.users.update_one({"_id": subscriber_id}, {"$push": {"subscriptions": author_id}})
         action = "subscribed"
+        # Notify author
+        try:
+            create_notification(recipient_id=author_id, ntype="subscribe", actor_id=subscriber_id)
+        except Exception:
+            pass
 
     return jsonify({"ok": True, "action": action})
 
@@ -483,7 +496,16 @@ def api_upload_image():
     orig = secure_filename(f.filename or "image")
     base, ext = os.path.splitext(orig)
     if not ext:
-        ext = ".png" if "/png" in ct else (".jpg" if "/jpeg" in ct else ".img")
+        if "/png" in ct:
+            ext = ".png"
+        elif "/jpeg" in ct or "/jpg" in ct:
+            ext = ".jpg"
+        elif "/webp" in ct:
+            ext = ".webp"
+        elif "/gif" in ct:
+            ext = ".gif"
+        else:
+            ext = ".img"
     fname = f"{uuid4().hex}{ext}"
     abs_path = os.path.join(upload_dir, fname)
     f.save(abs_path)

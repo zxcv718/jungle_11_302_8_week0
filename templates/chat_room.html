@@ -8,15 +8,41 @@
   <a href="{{ url_for('chat.chat_category', category=category) }}" class="text-sm text-blue-700">← 방 목록</a>
 </div>
 
-<div class="mb-2 text-sm text-gray-600">현재 인원: <span id="peerCount">-</span>명</div>
+<div id="chatArea">
+  <div class="mb-2 text-sm text-gray-600">현재 인원: <span id="peerCount">-</span>명</div>
 
-<div id="messages" class="h-[50vh] overflow-y-auto bg-white border rounded p-3 space-y-2"></div>
+  <div id="messages" class="h-[50vh] overflow-y-auto bg-white border rounded p-3 space-y-2"></div>
 
-<form id="sendForm" class="mt-3 flex gap-2" onsubmit="return false;">
+<form id="sendForm" class="mt-3 flex gap-2 items-center flex-wrap" onsubmit="return false;">
   <input id="msgInput" class="flex-1 border rounded px-3 py-2" placeholder="메시지를 입력하세요" />
   <button id="sendBtn" type="button" class="px-3 py-2 bg-blue-600 text-white rounded">전송</button>
   <button id="leaveBtn" type="button" class="px-3 py-2 bg-gray-600 text-white rounded">나가기</button>
+  <label class="px-3 py-2 border rounded cursor-pointer text-sm bg-white">
+    파일 선택
+    <input id="fileInput" type="file" class="hidden" />
+  </label>
  </form>
+</div>
+
+  <!-- Drag & Drop overlay (moved outside #chatArea so it won't be blurred) -->
+  <div id="dropOverlay" class="hidden fixed inset-0 z-20">
+    <div class="absolute inset-0 backdrop-blur-sm bg-white/40"></div>
+    <div class="relative z-10 h-full flex items-center justify-center">
+      <div class="border-2 border-dashed border-gray-400 rounded-xl p-8 bg-white/80 text-center max-w-sm shadow">
+        <div class="mx-auto w-20 h-20 mb-3 text-gray-700">
+          <svg viewBox="0 0 24 24" fill="currentColor" class="w-full h-full"><path d="M12 2a1 1 0 011 1v10.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4A1 1 0 016.707 11.293L9 13.586V3a1 1 0 011-1z"/><path d="M4 15a4 4 0 004 4h8a4 4 0 004-4v-1a1 1 0 112 0v1a6 6 0 01-6 6H8a6 6 0 01-6-6v-1a1 1 0 112 0v1z"/></svg>
+        </div>
+        <div class="font-semibold text-gray-900">클릭 혹은 파일을 이곳에 드롭하세요.</div>
+        <div class="text-sm text-gray-600 mt-1">파일당 최대 200MB</div>
+      </div>
+    </div>
+    <input id="dropFileInput" type="file" class="hidden" />
+    <button id="dropClose" type="button" class="absolute top-3 right-3 bg-white/80 border rounded px-2 py-1 text-xs">닫기</button>
+  </div>
+<style>
+  #chatArea.blurred { filter: blur(2px); }
+  #dropOverlay { pointer-events: auto; }
+</style>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
 <script id="roomScript" data-room-id="{{ room.id }}" data-me-name="{{ me_name }}" data-me-id="{{ me_id }}" data-back="{{ url_for('chat.chat_category', category=category) }}">
@@ -33,12 +59,185 @@
   const leaveBtn = document.getElementById('leaveBtn');
   const msgInput = document.getElementById('msgInput');
   const seenCids = new Set();
+  const fileInput = document.getElementById('fileInput');
   let isComposing = false;
+  const previewedIds = new Set();
+  const msgByKey = new Map(); // key (id|cid) -> message wrap element
+  const dropOverlay = document.getElementById('dropOverlay');
+  const dropClose = document.getElementById('dropClose');
+  const dropFileInput = document.getElementById('dropFileInput');
+  const chatArea = document.getElementById('chatArea');
+  const downloads = new Map(); // url -> {state, total, received, chunks, controller, mime, name, btn}
 
-  function appendMsg({name, text, ts, user_id}) {
+  function formatSize(bytes){
+    try{
+      const b = Number(bytes||0);
+      if (b < 1024) return `${b} B`;
+      const kb = b/1024; if (kb < 1024) return `${kb.toFixed(1)} KB`;
+      const mb = kb/1024; if (mb < 1024) return `${mb.toFixed(1)} MB`;
+      const gb = mb/1024; return `${gb.toFixed(1)} GB`;
+    }catch{ return `${bytes}`; }
+  }
+
+  function setBtnProgress(btn, pct, state){
+    const clamped = Math.max(0, Math.min(100, pct||0));
+    const bar = `linear-gradient(90deg, rgba(59,130,246,0.25) ${clamped}%, transparent ${clamped}%)`;
+    btn.style.backgroundImage = bar;
+    btn.style.backgroundRepeat = 'no-repeat';
+    btn.style.backgroundSize = '100% 100%';
+    const iconPause = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path d="M6 4a1 1 0 00-1 1v10a1 1 0 002 0V5a1 1 0 00-1-1zm8 1a1 1 0 00-1-1h-1a1 1 0 00-1 1v10a1 1 0 001 1h1a1 1 0 001-1V5z"/></svg>';
+    const iconPlay = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path d="M4.5 3.5a1 1 0 011.5-.866l10 6a1 1 0 010 1.732l-10 6A1 1 0 014.5 15.5v-12z"/></svg>';
+    const iconDownload = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path d="M10 2a1 1 0 011 1v7.586l2.293-2.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4A1 1 0 016.707 8.293L9 10.586V3a1 1 0 011-1z"/><path d="M3 15a2 2 0 002 2h10a2 2 0 002-2v-1a1 1 0 112 0v1a4 4 0 01-4 4H5a4 4 0 01-4-4v-1a1 1 0 112 0v1z"/></svg>';
+    if (state === 'downloading') {
+      btn.innerHTML = `${iconPause}<span>${clamped}%</span>`;
+    } else if (state === 'paused') {
+      btn.innerHTML = `${iconPlay}<span>재개 ${clamped}%</span>`;
+    } else if (state === 'done') {
+      btn.innerHTML = `${iconDownload}<span>저장</span>`;
+      btn.style.backgroundImage = 'none';
+    } else {
+      btn.innerHTML = `${iconDownload}<span>다운로드</span>`;
+      btn.style.backgroundImage = 'none';
+    }
+  }
+
+  async function probeTotal(url){
+    // Use Range 0-0 to get total size via Content-Range
+    const r = await fetch(url, { headers: { 'Range': 'bytes=0-0' }, credentials: 'same-origin' });
+    if (!r.ok && r.status !== 206) throw new Error('probe failed');
+    const cr = r.headers.get('Content-Range');
+    if (cr) {
+      const m = cr.match(/\/(\d+)$/);
+      if (m) return parseInt(m[1]);
+    }
+    const len = r.headers.get('Content-Length');
+    if (len) return parseInt(len);
+    throw new Error('no size');
+  }
+
+  async function startOrToggleDownload(url, name, btn){
+    let d = downloads.get(url);
+    if (!d) {
+      d = { state: 'idle', total: 0, received: 0, chunks: [], controller: null, mime: 'application/octet-stream', name, btn };
+      downloads.set(url, d);
+    }
+    // Toggle behavior
+    if (d.state === 'downloading') {
+      // Pause
+      try { d.controller && d.controller.abort(); } catch {}
+      d.state = 'paused';
+      setBtnProgress(btn, d.total ? Math.round(d.received*100/d.total) : 0, 'paused');
+      return;
+    }
+    if (d.state === 'paused') {
+      // Resume
+      return resumeDownload(url);
+    }
+    if (d.state === 'done') {
+      // Save again
+      const blob = new Blob(d.chunks, { type: d.mime || 'application/octet-stream' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = d.name || 'download';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      return;
+    }
+    // Start fresh
+    d.total = await probeTotal(url).catch(() => 0);
+    d.received = 0; d.chunks = [];
+    await resumeDownload(url);
+  }
+
+  async function resumeDownload(url){
+    const d = downloads.get(url);
+    if (!d) return;
+    d.state = 'downloading';
+    setBtnProgress(d.btn, d.total ? Math.round(d.received*100/d.total) : 0, 'downloading');
+    const controller = new AbortController();
+    d.controller = controller;
+    const headers = {};
+    if (d.received > 0) headers['Range'] = `bytes=${d.received}-`;
+    const r = await fetch(url, { headers, signal: controller.signal, credentials: 'same-origin' });
+    if (!r.ok && r.status !== 206 && r.status !== 200) {
+      d.state = 'paused';
+      setBtnProgress(d.btn, d.total ? Math.round(d.received*100/d.total) : 0, 'paused');
+      return;
+    }
+    d.mime = r.headers.get('Content-Type') || d.mime;
+    const reader = r.body && r.body.getReader ? r.body.getReader() : null;
+    if (!reader) {
+      // Fallback: no stream
+      const arr = await r.arrayBuffer();
+      d.chunks.push(new Uint8Array(arr));
+      d.received += arr.byteLength;
+      d.state = 'done';
+      setBtnProgress(d.btn, 100, 'done');
+      // auto save
+      const blob = new Blob(d.chunks, { type: d.mime || 'application/octet-stream' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = d.name || 'download';
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      return;
+    }
+    try {
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        if (value) {
+          d.chunks.push(value);
+          d.received += value.byteLength;
+          const pct = d.total ? Math.round(d.received*100/d.total) : 0;
+          setBtnProgress(d.btn, pct, 'downloading');
+        }
+      }
+      d.state = 'done';
+      setBtnProgress(d.btn, 100, 'done');
+      const blob = new Blob(d.chunks, { type: d.mime || 'application/octet-stream' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = d.name || 'download';
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        // paused by user
+      } else {
+        d.state = 'paused';
+      }
+      const pct = d.total ? Math.round(d.received*100/d.total) : 0;
+      setBtnProgress(d.btn, pct, d.state);
+    }
+  }
+  function formatSize(bytes){
+    try{
+      const b = Number(bytes||0);
+      if (b < 1024) return `${b} B`;
+      const kb = b/1024; if (kb < 1024) return `${kb.toFixed(1)} KB`;
+      const mb = kb/1024; if (mb < 1024) return `${mb.toFixed(1)} MB`;
+      const gb = mb/1024; return `${gb.toFixed(1)} GB`;
+    }catch{ return `${bytes}`; }
+  }
+
+  function parseFileMessage(text) {
+    // Supports both one-line and two-line formats
+    try {
+      const s = String(text||'').replace(/\r/g,'');
+      if (!s.includes('[파일]')) return null;
+      const m1 = s.match(/\[파일\]\s*(.+?)\s*\(([^)]+)\)/);
+      if (!m1) return null;
+      const m2 = s.match(/다운로드:\s*(\S+)/);
+      if (!m2) return null;
+      const name = m1[1];
+      const sizeText = m1[2];
+      const url = m2[1];
+      if (!url.startsWith('/api/chat/download/')) return null;
+      return { name, sizeText, url };
+    } catch { return null; }
+  }
+
+  function appendMsg({name, text, ts, user_id, id, cid}, keyOverride) {
     const t = new Date(ts);
     const when = isNaN(t.getTime()) ? '' : t.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
     const isMe = user_id && meId && String(user_id) === String(meId);
+  // Ignore system messages here; they are handled via 'system_notice' channel only to prevent duplicates
+  if (name === '알림') { return; }
     const wrap = document.createElement('div');
     wrap.className = `w-full flex ${isMe ? 'justify-end' : 'justify-start'} my-1`;
     const bubble = document.createElement('div');
@@ -47,19 +246,115 @@
     header.className = `mb-0.5 text-[10px] ${isMe ? 'text-blue-100' : 'text-gray-500'}`;
     header.textContent = `${name || '익명'} ${when ? '· ' + when : ''}`;
     const body = document.createElement('div');
-    body.innerHTML = (text||'').replace(/</g,'&lt;').replace(/\n/g,'<br>');
+    function escapeHtml(s){
+      return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));
+    }
+    function linkify(s){
+      const esc = escapeHtml(s);
+      const re = /(https?:\/\/[^\s<]+|\/api\/chat\/download\/[^\s<]+)/g;
+      return esc.replace(re, (m) => {
+        const href = encodeURI(m);
+        const isDl = m.startsWith('/api/chat/download/');
+        const label = escapeHtml(m);
+        return `<a href="${href}" class="text-black underline break-all" ${isDl ? 'download' : 'target="_blank" rel="noopener"'}>${label}</a>`;
+      }).replace(/\n/g,'<br>');
+    }
+    // Detect file message format and render with a download button on the right (except for uploader)
+    const f = parseFileMessage(text||'');
+    if (f) {
+      body.innerHTML = '';
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-3';
+      const info = document.createElement('div');
+      info.className = 'min-w-0';
+      info.innerHTML = `
+        <div class="font-medium truncate">${escapeHtml(f.name)}</div>
+        <div class="text-xs ${isMe ? 'text-blue-100' : 'text-gray-600'}">${escapeHtml(f.sizeText)}</div>
+      `;
+      row.appendChild(info);
+      if (!isMe) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `${isMe ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-white hover:bg-gray-100 text-gray-800'} border rounded px-3 py-1 text-xs whitespace-nowrap flex items-center gap-1`;
+        setBtnProgress(btn, 0, 'idle');
+        btn.addEventListener('click', () => startOrToggleDownload(f.url, f.name, btn));
+        row.appendChild(btn);
+      }
+      body.appendChild(row);
+    } else {
+      body.innerHTML = linkify(text||'');
+    }
     bubble.appendChild(header);
     bubble.appendChild(body);
     wrap.appendChild(bubble);
     messagesEl.appendChild(wrap);
     messagesEl.scrollTop = messagesEl.scrollHeight;
+  const key = keyOverride || id || cid || null;
+  if (key) msgByKey.set(key, wrap);
+  }
+
+  function appendPreviewCard(meta, isMe, key) {
+    const wrap = document.createElement('div');
+    wrap.className = `w-full flex ${isMe ? 'justify-end' : 'justify-start'} my-1`;
+    const card = document.createElement('a');
+    card.href = meta.url || '#';
+    card.target = '_blank';
+    card.className = 'block max-w-[75%] bg-white border rounded p-2 hover:bg-gray-50';
+    card.innerHTML = `
+      <div class="flex gap-2 items-start">
+        ${meta.image ? `<img src="${meta.image}" alt="thumb" class="w-16 h-16 object-cover rounded">` : ''}
+        <div class="min-w-0">
+          <div class="font-medium truncate">${(meta.title||'').replace(/</g,'&lt;')}</div>
+          <div class="text-sm text-gray-600 line-clamp-2">${(meta.description||'').replace(/</g,'&lt;')}</div>
+          <div class="text-xs text-gray-500 truncate">${(meta.url||'').replace(/</g,'&lt;')}</div>
+        </div>
+      </div>`;
+    wrap.appendChild(card);
+    if (key && msgByKey.has(key)) {
+      const msgEl = msgByKey.get(key);
+      if (msgEl && msgEl.parentNode) {
+        msgEl.parentNode.insertBefore(wrap, msgEl.nextSibling);
+      } else {
+        messagesEl.appendChild(wrap);
+      }
+    } else {
+      messagesEl.appendChild(wrap);
+    }
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  async function maybePreviewURL(text, isMe=false, key=null) {
+    try {
+      const urlMatch = (text||'').match(/https?:\/\/[^\s]+/);
+      if (!urlMatch) return;
+      const u = urlMatch[0];
+      const r = await fetch(`{{ url_for('posts.api_preview_url') }}?url=` + encodeURIComponent(u), { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j && j.ok) {
+        if (key) {
+          if (previewedIds.has(key)) return;
+          previewedIds.add(key);
+        }
+        appendPreviewCard(j, isMe, key);
+      }
+    } catch {}
   }
 
   async function loadHistory() {
-  const res = await fetch(`{{ url_for('chat.api_room_messages', category=category, room_id=room.id) }}`, { credentials: 'same-origin' });
+    const res = await fetch(`{{ url_for('chat.api_room_messages', category=category, room_id=room.id) }}`, { credentials: 'same-origin' });
     if (!res.ok) return;
     const j = await res.json();
-    (j.messages||[]).forEach(appendMsg);
+    (j.messages||[]).forEach((m) => {
+      appendMsg(m, m.id);
+      const isMine = m.user_id && meId && String(m.user_id) === String(meId);
+      if (m.preview && m.preview.ok) {
+        appendPreviewCard(m.preview, isMine, m.id);
+      } else {
+        // Don’t pre-mark previewed; let maybePreviewURL add after successful fetch
+        maybePreviewURL(m.text, isMine, m.id);
+      }
+    });
   }
   loadHistory();
 
@@ -101,11 +396,17 @@
         if (r.ok) {
           const j = await r.json().catch(() => null);
           // No socket to receive broadcast; append locally after successful POST
-          appendMsg({ name: meName || '나', text, ts: (j && j.ts) || new Date().toISOString(), cid, user_id: (j && j.user_id) || meId });
+          const key = (j && j.id) || cid;
+          appendMsg({ name: meName || '나', text, ts: (j && j.ts) || new Date().toISOString(), cid, user_id: (j && j.user_id) || meId, id: (j && j.id) }, key);
+          maybePreviewURL(text, true, key);
         }
       }
     } catch (err) { console.warn('send failed', err); }
     msgInput.value = '';
+    // If socket path handled, preview for my message (use cid as key until server id arrives)
+    if (socket && socket.connected) {
+      maybePreviewURL(text, true, genCid());
+    }
   }
 
   sendBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); sendCurrent(window.__socket); });
@@ -165,15 +466,34 @@
         try { if (!socket.connected) setTimeout(() => socket.connect(), 300); } catch {}
       });
       socket.on('room_peers', ({room_id, peers}) => { if (room_id===roomId) { console.log('[chat] room_peers', peers); peerEl.textContent = peers; } });
-      socket.on('joined', ({room_id, peers}) => { if (room_id===roomId) { console.log('[chat] joined ack', peers); peerEl.textContent = peers; } });
-    socket.on('new_message', (m) => {
+      socket.on('joined', ({room_id, peers}) => {
+        if (room_id===roomId) {
+          console.log('[chat] joined ack', peers);
+          peerEl.textContent = peers;
+        }
+      });
+      socket.on('new_message', (m) => {
         if (m.room_id!==roomId) return;
         if (m.cid) {
           if (seenCids.has(m.cid)) return;
           seenCids.add(m.cid);
         }
         console.log('[chat] new_message', m);
-        appendMsg(m);
+        const key = m.id || m.cid || null;
+        appendMsg(m, key);
+        const isMe = m.user_id && meId && String(m.user_id) === String(meId);
+        if (m.preview && m.preview.ok) {
+          appendPreviewCard(m.preview, isMe, key);
+        } else {
+          if (key && previewedIds.has(key)) return;
+          if (key) previewedIds.add(key);
+          maybePreviewURL(m.text, isMe, key);
+        }
+      });
+      // Dedicated system notice channel (ensures all peers render a center notice)
+  socket.on('system_notice', ({room_id, text}) => {
+        if (room_id!==roomId) return;
+        appendMsg({ name: '알림', text, ts: new Date().toISOString(), user_id: null, id: null, cid: null });
       });
       socket.__handlersBound = true;
     } else {
@@ -188,5 +508,103 @@
   // no-op
   }
   startSocket();
+
+  // Upload file and send a message with download link
+  fileInput.addEventListener('change', async (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  if (f.size > 200*1024*1024) { alert('파일이 200MB를 초과합니다.'); e.target.value=''; return; }
+  await uploadAndSend(f);
+  e.target.value = '';
+  });
+
+  // Drag & Drop handling
+  let dragDepth = 0;
+  function showOverlay(){ chatArea.classList.add('blurred'); dropOverlay.classList.remove('hidden'); }
+  function hideOverlay(){ chatArea.classList.remove('blurred'); dropOverlay.classList.add('hidden'); }
+  document.addEventListener('dragenter', (e) => { dragDepth++; showOverlay(); });
+  document.addEventListener('dragleave', (e) => { dragDepth = Math.max(0, dragDepth-1); if (dragDepth===0) hideOverlay(); });
+  document.addEventListener('dragover', (e) => { e.preventDefault(); });
+  document.addEventListener('drop', async (e) => {
+    e.preventDefault(); dragDepth = 0; hideOverlay();
+    const fl = e.dataTransfer && e.dataTransfer.files; if (!fl || !fl.length) return;
+    const f = fl[0];
+    // size check (200MB)
+    if (f.size > 200*1024*1024) { alert('파일이 200MB를 초과합니다.'); return; }
+    await uploadAndSend(f);
+  });
+  dropOverlay.addEventListener('click', (e) => {
+    if (e.target === dropOverlay) { hideOverlay(); }
+  });
+  dropClose.addEventListener('click', hideOverlay);
+  dropOverlay.querySelector('.border-dashed').addEventListener('click', () => dropFileInput.click());
+  dropFileInput.addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return; hideOverlay();
+    if (f.size > 200*1024*1024) { alert('파일이 200MB를 초과합니다.'); return; }
+    await uploadAndSend(f); e.target.value = '';
+  });
+
+  async function uploadAndSend(f){
+    try {
+      const fd = new FormData(); fd.append('file', f);
+      let r = await fetch(`{{ url_for('chat.api_upload_file') }}`, { method: 'POST', credentials: 'same-origin', body: fd });
+      // If blocked by proxy (e.g., 413) or network error, fallback to chunked upload
+      if (!r.ok) {
+        if (r.status === 413) {
+          const j2 = await uploadChunked(f);
+          if (!j2) { alert('업로드 실패'); return; }
+          const showName2 = (f && f.name) ? f.name : (j2.name || 'file');
+          const linkText2 = `[파일] ${showName2} (${formatSize(j2.size)})\n다운로드: ${j2.download_url}`;
+          msgInput.value = linkText2; sendCurrent(window.__socket); return;
+        } else {
+          // try chunked as generic fallback too
+          const j3 = await uploadChunked(f);
+          if (j3) {
+            const showName3 = (f && f.name) ? f.name : (j3.name || 'file');
+            const linkText3 = `[파일] ${showName3} (${formatSize(j3.size)})\n다운로드: ${j3.download_url}`;
+            msgInput.value = linkText3; sendCurrent(window.__socket); return;
+          }
+          alert('업로드 실패'); return;
+        }
+      }
+      const j = await r.json(); if (!j.ok) { alert('업로드 실패'); return; }
+      const showName = (f && f.name) ? f.name : (j.name || 'file');
+      const linkText = `[파일] ${showName} (${formatSize(j.size)})\n다운로드: ${j.download_url}`;
+      msgInput.value = linkText; sendCurrent(window.__socket);
+    } catch (err) { 
+      console.warn('upload failed', err);
+      const j4 = await uploadChunked(f);
+      if (j4) {
+        const showName4 = (f && f.name) ? f.name : (j4.name || 'file');
+        const linkText4 = `[파일] ${showName4} (${formatSize(j4.size)})\n다운로드: ${j4.download_url}`;
+        msgInput.value = linkText4; sendCurrent(window.__socket); return;
+      }
+      alert('업로드 실패');
+    }
+  }
+
+  async function uploadChunked(f, opts={chunkSize: 2*1024*1024}){
+    const chunkSize = opts.chunkSize;
+    const total = Math.ceil(f.size / chunkSize);
+    const uploadId = Math.random().toString(36).slice(2);
+    for (let i=0; i<total; i++){
+      const start = i * chunkSize;
+      const end = Math.min(f.size, start + chunkSize);
+      const blob = f.slice(start, end);
+      const fd = new FormData();
+      fd.append('chunk', blob, `${f.name}.part`);
+      fd.append('upload_id', uploadId);
+      fd.append('chunk_index', String(i));
+      fd.append('total_chunks', String(total));
+      fd.append('name', f.name || 'file');
+      fd.append('size', String(f.size));
+  const r = await fetch('/api/chat/uploads/files/chunked', { method: 'POST', credentials: 'same-origin', body: fd });
+      if (!r.ok) { console.warn('chunk failed', i, r.status); return null; }
+      const j = await r.json();
+      if (!j.ok) { console.warn('chunk err payload', j); return null; }
+      if (j.done) return j; // final response with download_url
+    }
+    return null;
+  }
 </script>
 {% endblock %}

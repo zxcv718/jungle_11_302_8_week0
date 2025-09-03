@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from ..extensions import mongo
+from ..services.notifications import create_notification
 
 bp = Blueprint("comments", __name__)
 
@@ -159,6 +160,15 @@ def comment_like(comment_id):
 
     new_comment = mongo._db["comments"].find_one({"_id": cid})
     like_count = len(new_comment.get("likes", [])) if new_comment else 0
+
+    # Notify comment owner when someone liked their comment (on like only)
+    try:
+        if msg.startswith("댓글을 추천했습니다."):
+            owner_id = comment.get("user_id")
+            if owner_id and owner_id != uid:
+                create_notification(recipient_id=owner_id, ntype="comment_like", actor_id=uid, comment_id=cid, post_id=comment.get("post_id"))
+    except Exception:
+        pass
 
     if is_ajax:
         best_html = _best_comments_html(comment.get("post_id"))

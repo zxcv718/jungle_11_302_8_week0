@@ -53,11 +53,11 @@
           {% for post in posts %}
             <a href="{{ url_for('posts.post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
               <div class="flex justify-between items-center text-sm text-gray-500 mb-1">
-                <span>{{ post.category or '' }} · {{ post.date_text or '' }}</span>
+                <span>{{ post.category or '' }} · {{ post.author_name or '알 수 없음' }}</span>
                 <span class="font-semibold text-emerald-600">추천 {{ post.like_count }}</span>
               </div>
-              <div class="font-semibold text-gray-900 line-clamp-1">{{ post.title or '' }}</div>
-              <div class="text-gray-700 mt-1 line-clamp-2">{{ post.contents or '' }}</div>
+              <div class="font-semibold text-gray-900 line-clamp-1 text-[1rem]">{{ post.title or '' }}</div>
+              <div class="text-gray-700 mt-1 line-clamp-2 text-[2rem]">{{ post.contents or '' }}</div>
             </a>
           {% endfor %}
         {% else %}
@@ -75,7 +75,7 @@
             {% if subscribed_posts %}
                 {% for post in subscribed_posts %}
                     <a href="{{ url_for('posts.post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
-                      <div class="text-sm text-gray-500 mb-1">{{ post.date_text or '' }}</div>
+                      <div class="text-sm text-gray-500 mb-1">{{ post.author_name or '알 수 없음' }}</div>
                       <div class="font-semibold text-gray-900 line-clamp-1">{{ post.title or '' }}</div>
                     </a>
                 {% endfor %}

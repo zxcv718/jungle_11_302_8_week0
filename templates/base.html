@@ -19,8 +19,20 @@
       <div class="max-w-3xl mx-auto px-4 py-3 flex justify-between items-center">
         <a href="{{ url_for('home.root') }}" class="font-semibold">JStory</a>
         {% if not hide_top_nav %}
-          <div class="space-x-3 flex items-center">
+    <div class="space-x-3 flex items-center relative">
             {% if user_info %}
+              <div id="notifContainer" class="relative">
+                <button id="notifToggle" type="button" class="relative flex items-center justify-center focus:outline-none" aria-label="알림 열기">
+      <span id="notifBadge" class="-ml-2 mr-2 bg-orange-500 text-white text-xs font-bold rounded-full min-w-[20px] h-[20px] px-1 flex items-center justify-center">0</span>
+                </button>
+                <div id="notifDropdown" class="hidden absolute right-0 mt-2 w-72 bg-white border rounded shadow z-30">
+                  <div class="px-3 py-2 border-b font-semibold">알림</div>
+                  <ul id="notifList" class="max-h-80 overflow-y-auto divide-y"></ul>
+                  <div class="px-3 py-2 text-right">
+                    <button id="notifMarkRead" class="text-xs text-gray-600 hover:text-gray-900">모두 읽음 처리</button>
+                  </div>
+                </div>
+              </div>
               <span class="text-sm text-gray-600">{{ user_info.name }}님</span>
               <a href="{{ url_for('posts.dashboard') }}" class="text-sm text-gray-600 hover:text-gray-900">대시보드</a>
               <form action="{{ url_for('auth.logout') }}" method="post" class="inline">
@@ -48,5 +60,129 @@
       {% endwith %}
       {% block content %}{% endblock %}
     </main>
+  {% if user_info and not hide_top_nav %}
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+  <script>
+    (function(){
+      const notifContainer = document.getElementById('notifContainer');
+      if (!notifContainer) return;
+      const toggleBtn = document.getElementById('notifToggle');
+      const badge = document.getElementById('notifBadge');
+      const dropdown = document.getElementById('notifDropdown');
+      const listEl = document.getElementById('notifList');
+      const markReadBtn = document.getElementById('notifMarkRead');
+      let isOpen = false;
+
+      async function fetchWithAutoRefresh(url, options={}){
+        const loginUrl = "{{ url_for('auth.login_get') }}";
+        const refreshUrl = "{{ url_for('auth.refresh') }}";
+        const res = await fetch(url, { credentials: 'same-origin', ...options });
+        if (res.status !== 401) return res;
+        try {
+          const r = await fetch(refreshUrl, { method: 'POST', credentials: 'same-origin' });
+          if (r.ok) return fetch(url, { credentials: 'same-origin', ...options });
+        } catch {}
+        return res;
+      }
+
+      function setBadge(n){
+        const c = Number(n||0);
+        badge.textContent = String(c);
+      }
+
+      function renderList(items){
+        listEl.innerHTML = '';
+        if (!items || items.length === 0){
+          const li = document.createElement('li');
+          li.className = 'px-3 py-3 text-sm text-gray-500';
+          li.textContent = '새 알림이 없습니다.';
+          listEl.appendChild(li);
+          return;
+        }
+        for (const it of items){
+          const li = document.createElement('li');
+          li.className = 'px-3 py-2 text-sm hover:bg-gray-50';
+          li.textContent = it.text || '';
+          listEl.appendChild(li);
+        }
+      }
+
+    async function loadCount(){
+        try{
+      const r = await fetchWithAutoRefresh("/api/notifications/count");
+          if (!r.ok) return;
+          const j = await r.json();
+          if (j && j.ok) setBadge(j.count);
+        }catch{}
+      }
+
+    async function loadList(){
+        try{
+      const r = await fetchWithAutoRefresh("/api/notifications/list?limit=20");
+          if (!r.ok) return;
+          const j = await r.json();
+          if (j && j.ok) renderList(j.items);
+        }catch{}
+      }
+
+    async function markAllRead(){
+        try{
+      const r = await fetchWithAutoRefresh("/api/notifications/read", { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+          if (r.ok) setBadge(0);
+        }catch{}
+      }
+
+      toggleBtn.addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        isOpen = !isOpen;
+        dropdown.classList.toggle('hidden', !isOpen);
+        if (isOpen){
+          await loadList();
+          await markAllRead();
+        }
+      });
+
+      markReadBtn.addEventListener('click', async (e)=>{
+        e.preventDefault();
+        e.stopPropagation();
+        await markAllRead();
+      });
+
+      document.addEventListener('click', (e)=>{
+        if (!isOpen) return;
+        if (!notifContainer.contains(e.target)){
+          isOpen = false;
+          dropdown.classList.add('hidden');
+        }
+      });
+
+      // Socket.IO for real-time notifications
+      try {
+        const socket = io({ withCredentials: true });
+        socket.on('connect', ()=>{
+          // Ask server to bind this connection to personal room (in case JWT not visible in handshake)
+          socket.emit('bind_user_notifications', {});
+        });
+        socket.on('notify', (payload)=>{
+          // bump count and prepend item if open
+          try{
+            const cur = Number(badge.textContent||0) || 0;
+            setBadge(cur + 1);
+            if (isOpen){
+              const li = document.createElement('li');
+              li.className = 'px-3 py-2 text-sm hover:bg-gray-50';
+              li.textContent = payload && payload.text ? payload.text : '새 알림';
+              listEl.prepend(li);
+            }
+          }catch{}
+        });
+      } catch(e) { console.warn('socket init failed', e); }
+
+  // Initial fetch + fallback polling every 10s
+  loadCount();
+  setInterval(loadCount, 10000);
+    })();
+  </script>
+  {% endif %}
   </body>
 </html>

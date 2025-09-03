@@ -24,7 +24,9 @@ def run():
     # Keep debug off in runner to avoid auto-reloader overhead in dev when performance matters
     debug = bool(int(os.getenv("FLASK_DEBUG", "1")))
     use_debug = debug
-    socketio.run(app, host=host, port=port, debug=use_debug, use_reloader=False)
+    # enable reloader in debug so blueprint/route changes are picked up automatically
+    use_reloader = True if use_debug else False
+    socketio.run(app, host=host, port=port, debug=use_debug, use_reloader=use_reloader)
 
 
 if __name__ == "__main__":
