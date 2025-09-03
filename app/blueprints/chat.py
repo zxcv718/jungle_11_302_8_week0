@@ -138,8 +138,8 @@ def api_send_message(category, room_id):
     except Exception:
         mid = None
     try:
-        from flask_socketio import emit
-        emit("new_message", {
+        # Use shared SocketIO instance for consistency
+        socketio.emit("new_message", {
             "id": mid or "temp-" + str(int(created.timestamp()*1000)),
             "room_id": room_id,
             "user_id": str(uid),
@@ -211,3 +211,52 @@ def ws_leave(data):
         sid_rooms[request.sid].remove(rid)
         online_counts[rid] = max(0, online_counts.get(rid, 1) - 1)
         emit("room_peers", {"room_id": rid, "peers": online_counts.get(rid, 0)}, to=rid)
+
+
+@socketio.on("send_message")
+def ws_send_message(data):
+    """WebSocket: send a message to a room, persist to DB, and broadcast."""
+    try:
+        verify_jwt_in_request(optional=False)
+    except Exception:
+        return
+    payload = data or {}
+    rid = (payload.get("room_id") or "").strip()
+    text = (payload.get("text") or "").strip()
+    cid = (payload.get("cid") or "").strip() or None
+    if not rid or not text:
+        return
+    # Validate room
+    try:
+        rid_obj = ObjectId(rid)
+    except Exception:
+        return
+    if not mongo._db["chat_rooms"].find_one({"_id": rid_obj}):
+        return
+    # Build message
+    uid = ObjectId(get_jwt_identity())
+    j = get_jwt()
+    name = j.get("name") or "익명"
+    created = datetime.now(timezone.utc)
+    doc = {"room_id": rid_obj, "user_id": uid, "name": name, "text": text, "created_at": created}
+    try:
+        res = mongo._db["chat_messages"].insert_one(doc)
+        mid = str(res.inserted_id)
+    except Exception:
+        mid = None
+    # Broadcast to room
+    try:
+        socketio.emit("new_message", {
+            "id": mid or "temp-" + str(int(created.timestamp()*1000)),
+            "room_id": rid,
+            "user_id": str(uid),
+            "name": name,
+            "text": text,
+            "ts": created.isoformat(),
+            "cid": cid,
+        }, to=rid)
+        # Optional: ACK back to sender
+        from flask_socketio import emit as ws_emit
+        ws_emit("send_ack", {"id": mid or None})
+    except Exception:
+        pass
