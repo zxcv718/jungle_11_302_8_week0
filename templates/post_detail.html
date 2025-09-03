@@ -39,7 +39,36 @@
   </div>
   <div>
     <label class="block text-sm text-gray-500">내용</label>
-    <div class="w-full border rounded px-3 py-2 bg-gray-100 whitespace-pre-wrap">{{ post.contents }}</div>
+      {% if post.contents_html %}
+        <div class="w-full border rounded bg-white px-3 py-2 prose max-w-none">{{ post.contents_html|safe }}</div>
+      {% else %}
+        <!-- Toast UI Viewer for Markdown rendering (fallback when SSR not available) -->
+        <link rel="stylesheet" href="https://uicdn.toast.com/editor/latest/toastui-editor.min.css">
+        <script src="https://uicdn.toast.com/editor/latest/toastui-editor-all.min.js"></script>
+        <textarea id="md-src" class="hidden">{{ post.contents }}</textarea>
+        <div id="viewer" class="w-full border rounded bg-white"></div>
+        <script>
+          (function(){
+            try {
+              const src = document.getElementById('md-src');
+              const md = src ? src.value : '';
+              new toastui.Editor.factory({
+                el: document.querySelector('#viewer'),
+                viewer: true,
+                usageStatistics: false,
+                initialValue: md || ''
+              });
+            } catch(e) {
+              // Fallback to plain text if CDN failed
+              const v = document.getElementById('viewer');
+              if (v) {
+                v.className += ' px-3 py-2 whitespace-pre-wrap';
+                v.textContent = (document.getElementById('md-src')?.value) || '';
+              }
+            }
+          })();
+        </script>
+      {% endif %}
     <div class="text-xs text-gray-500 mt-1">{{ post.date_text }}</div>
   </div>
 

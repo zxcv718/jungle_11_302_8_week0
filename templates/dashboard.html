@@ -1,5 +1,16 @@
 {% extends 'base.html' %}
 {% block content %}
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  /* Ensure momentum scrolling on iOS */
+  #listWrap { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+  /* Thin horizontal scrollbar for category strip */
+  #catWrap { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.3) transparent; }
+  #catWrap::-webkit-scrollbar { height: 4px; }
+  #catWrap::-webkit-scrollbar-track { background: transparent; }
+  #catWrap::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.25); border-radius: 9999px; }
+  #catWrap:hover::-webkit-scrollbar-thumb { background-color: rgba(0,0,0,0.4); }
+</style>
 <header class="sticky top-0 bg-gray-50 z-20">
   <div class="flex items-center justify-between py-4 max-w-4xl mx-auto">
     <div class="text-2xl font-bold">{{ name }}의 블로그</div>
@@ -18,7 +29,7 @@
   <div class="flex items-center justify-between max-w-4xl mx-auto">
     <div id="catWrap" class="overflow-x-auto pr-4">
       <div class="flex gap-2 min-w-max">
-        {% set cats = ['전체','사회','경제','과학','문화','기술','환경','스포츠','생활','역사','철학','기타'] %}
+  {% set cats = ['전체','프로그래밍언어','자료구조','알고리즘','컴퓨터구조','운영체제','시스템프로그래밍','데이터베이스','AI','보안','네트워크','기타'] %}
         {% for c in cats %}
           <button data-cat="{{ c }}" class="cat-btn px-3 py-1 rounded-full border text-sm whitespace-nowrap {{ 'bg-gray-900 text-white' if c=='전체' else 'bg-white' }}">{{ c }}</button>
         {% endfor %}
@@ -42,13 +53,39 @@
     </div>
   </div>
 
-  <div id="list" class="mt-4 space-y-4 max-w-4xl mx-auto"></div>
-  <div id="empty" class="mt-8 text-center text-gray-500 hidden">검색 결과가 없습니다.</div>
-  <div id="sentinel" class="h-8"></div>
+  <div id="listWrap" class="mt-4 max-w-4xl mx-auto" style="overflow-y:auto;">
+    <div id="list" class="space-y-4">
+      {% if initial_items %}
+        {% for it in initial_items %}
+          <a href="{{ url_for('post_detail', id=it.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
+            <div class="flex gap-3 items-start">
+              <div class="flex-1 min-w-0">
+                <div class="text-sm text-gray-500 mb-1">{{ it.category or '' }} · {{ it.date_text or '' }}</div>
+                <div class="text-gray-900 truncate text-[2rem]">{{ it.title }}</div>
+                <div class="text-gray-800 mt-1 font-bold truncate text-[3rem]">{{ it.contents_text }}</div>
+              </div>
+              {% if it.first_image %}
+                <div class="flex-shrink-0 rounded-lg bg-green-100 border border-green-200 p-1" style="width:150px;height:150px">
+                  <img src="{{ it.first_image }}" alt="thumbnail" class="w-full h-full object-cover rounded-md">
+                </div>
+              {% endif %}
+            </div>
+          </a>
+        {% endfor %}
+      {% endif %}
+    </div>
+    <div id="empty" class="mt-8 text-center text-gray-500 hidden">검색 결과가 없습니다.</div>
+    <div id="sentinel" class="h-8"></div>
+  </div>
 </section>
+
+<!-- Markdown preview libs for dashboard listing (lightweight viewer) -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 
 <script>
   const listEl = document.getElementById('list');
+  const listWrap = document.getElementById('listWrap');
   const emptyEl = document.getElementById('empty');
   const sentinel = document.getElementById('sentinel');
   const catBtns = Array.from(document.querySelectorAll('.cat-btn'));
@@ -59,12 +96,13 @@
   const searchClear = document.getElementById('searchClear');
   const loginUrl = "{{ url_for('login_get') }}";
   const refreshUrl = "{{ url_for('refresh') }}";
+  const initialPage = Number("{{ 2 if initial_items else 1 }}");
 
   let state = {
     category: '전체',
     q: '',
     sort: 'new',
-    page: 1,
+    page: initialPage,
     limit: 10,
     loading: false,
     done: false,
@@ -80,20 +118,146 @@
     } catch (e) { return text; }
   }
 
+  // Title highlight without bold
+  function highlightTitle(text, q) {
+    if (!q) return text;
+    try {
+      const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+      return text.replace(re, '<span class="bg-yellow-200 rounded px-0.5">$1</span>');
+    } catch (e) { return text; }
+  }
+
+  function extractFirstImage(md) {
+    if (!md) return null;
+    // Simple regex for markdown image ![alt](url) and direct <img src="...">
+    const mdImg = md.match(/!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/);
+    if (mdImg && mdImg[1]) return mdImg[1];
+    const htmlImg = md.match(/<img[^>]+src=["']([^"']+)["']/i);
+    if (htmlImg && htmlImg[1]) return htmlImg[1];
+    return null;
+  }
+
+  // Highlight helper for HTML: wrap matches in text nodes without breaking tags
+  function highlightInElement(root, q) {
+    if (!q) return;
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const toProcess = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.nodeValue && re.test(node.nodeValue)) {
+        toProcess.push(node);
+      }
+    }
+    for (const textNode of toProcess) {
+      const frag = document.createDocumentFragment();
+      const parts = textNode.nodeValue.split(re);
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) frag.appendChild(document.createTextNode(parts[i]));
+        if (i < parts.length - 1) {
+          const mark = document.createElement('span');
+          mark.className = 'bg-yellow-200 font-semibold rounded px-0.5';
+          mark.textContent = (textNode.nodeValue.match(re) || [q])[0];
+          frag.appendChild(mark);
+        }
+      }
+      textNode.parentNode.replaceChild(frag, textNode);
+    }
+  }
+
+  // Render Markdown to plain text for preview: remove editor effects, URLs/images; return escaped text
+  function renderPreviewHTML(md, q) {
+    if (!md) return '';
+    if (window.marked && window.DOMPurify) {
+      try {
+        const raw = window.marked.parse(md);
+        const safe = window.DOMPurify.sanitize(raw);
+        const container = document.createElement('div');
+        container.innerHTML = safe;
+        // Remove images and embeds
+        container.querySelectorAll('img, iframe, video, audio, object, embed').forEach(el => el.remove());
+        // Replace links: if href is URL-like, drop entirely; otherwise keep only text
+        container.querySelectorAll('a').forEach(a => {
+          const href = (a.getAttribute('href') || '').trim();
+          const isURLHref = /^(?:https?:\/\/|ftp:\/\/|\/\/|www\.)/i.test(href);
+          if (isURLHref) {
+            a.replaceWith(document.createTextNode(''));
+          } else {
+            const txt = (a.textContent || '').trim();
+            a.replaceWith(document.createTextNode(txt));
+          }
+        });
+        // Remove raw URLs that might remain in plain text nodes
+        const urlRe = /(?:https?:\/\/|www\.)\S+/gi;
+        const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+        const textNodes = [];
+        let tn;
+        while ((tn = walker.nextNode())) textNodes.push(tn);
+        textNodes.forEach(node => {
+          if (!node.nodeValue) return;
+          node.nodeValue = node.nodeValue.replace(urlRe, '').replace(emailRe, '').replace(/\s{2,}/g, ' ');
+        });
+
+        // Optional: strip empty paragraphs left by removals
+        container.querySelectorAll('p, li, h1,h2,h3,h4,h5,h6,blockquote').forEach(el => {
+          if (!el.textContent.trim()) el.remove();
+        });
+
+        // Extract plain text, collapse whitespace
+        let text = container.textContent || '';
+        text = text.replace(/\s+/g, ' ').trim();
+        // Escape for safe HTML insertion
+        let escaped = text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+        if (q && q.trim()) escaped = highlight(escaped, q.trim());
+        return escaped;
+      } catch (_) {
+        // fallthrough to text fallback
+      }
+    }
+    // Fallback: basic text cleanup in absence of libs
+    let t = String(md);
+    // Remove images and links (keep anchor text), strip markdown decorations
+    t = t.replace(/!\[[^\]]*\]\([^)]*\)/g, ''); // images
+    t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1'); // links -> text
+    t = t.replace(/\b(?:https?:\/\/|www\.)[^\s)]+/gi, ''); // raw urls
+    t = t.replace(/`{1,3}[^`]*`{1,3}/g, (m) => m.replace(/`/g, '')); // code
+    t = t.replace(/[\*_~]{1,3}([^\*_~]+)[\*_~]{1,3}/g, '$1'); // bold/italic/strike
+    t = t.replace(/^#{1,6}\s*/gm, ''); // headings
+    t = t.replace(/^\s{0,3}>\s?/gm, ''); // blockquote
+    t = t.replace(/^\s*([-*+]|\d+\.)\s+/gm, ''); // lists
+    t = t.replace(/<[^>]+>/g, ''); // html tags
+    t = t.replace(/\s+/g, ' ').trim();
+    let escaped = t.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    if (q && q.trim()) escaped = highlight(escaped, q.trim());
+    return escaped;
+  }
+
   function renderItems(items) {
     if (state.page === 1) listEl.innerHTML = '';
     for (const it of items) {
-      const title = highlight(it.title || '', state.q);
-      const contents = highlight(it.contents || '', state.q);
+  const title = highlightTitle(it.title || '', state.q);
+      const md = it.contents || '';
+      const firstImg = extractFirstImage(md);
+  // Preview with editor effects, excluding non-text like URLs/images
+  const previewHTML = renderPreviewHTML(md, state.q);
   const el = document.createElement('a');
   el.href = `{{ url_for('post_detail', id='__ID__') }}`.replace('__ID__', it.id);
   el.target = '_self';
       el.className = 'block p-4 bg-white rounded border hover:bg-gray-50';
       el.innerHTML = `
-  <div class="text-sm text-gray-500 mb-1">${it.category || ''} · ${it.date_text || ''}</div>
-        <div class="font-semibold text-gray-900 line-clamp-1" style="display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden">${title}</div>
-        <div class="text-gray-700 mt-1 line-clamp-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${contents}</div>
-      `;
+        <div class="flex gap-3 items-start">
+          <div class="flex-1 min-w-0">
+            <div class="text-sm text-gray-500 mb-1">${it.category || ''} · ${it.date_text || ''}</div>
+            <div class="text-gray-900 truncate text-[2rem]">${title}</div>
+            <div class="text-gray-800 mt-1 font-bold truncate text-[3rem]">${previewHTML}</div>
+          </div>
+          ${firstImg ? `
+            <div class="flex-shrink-0 rounded-lg bg-green-100 border border-green-200 p-1" style="width:150px;height:150px">
+              <img src="${firstImg}" alt="thumbnail" class="w-full h-full object-cover rounded-md">
+            </div>
+          ` : ''}
+        </div>`;
       listEl.appendChild(el);
     }
   }
@@ -248,8 +412,22 @@
         fetchPage();
       }
     })
-  })
+  }, { root: listWrap })
   io.observe(sentinel);
+
+  // Resize scroll area to fill remaining viewport height
+  function adjustListHeight() {
+    if (!listWrap) return;
+    const rect = listWrap.getBoundingClientRect();
+    const bottomPadding = 16; // px
+    const h = Math.max(120, Math.floor(window.innerHeight - rect.top - bottomPadding));
+    listWrap.style.height = h + 'px';
+  }
+  window.addEventListener('resize', adjustListHeight);
+  // Recompute after opening/closing search box
+  searchToggle.addEventListener('click', () => setTimeout(adjustListHeight, 0));
+  // Initial
+  adjustListHeight();
 
   // First load
   fetchPage(true);

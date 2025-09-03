@@ -19,9 +19,14 @@ from flask_jwt_extended import (
 )
 from pymongo import MongoClient
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
+from uuid import uuid4
 from bson import ObjectId
 from urllib.parse import urlparse
 from metadata import fetch_and_extract_metadata, normalize_url
+import re
+import bleach
+import markdown2
 
 load_dotenv()
 
@@ -33,6 +38,13 @@ jwt = JWTManager(app)
 socketio = SocketIO(app, cors_allowed_origins=None, async_mode="threading", logger=True, engineio_logger=True)
 @app.after_request
 def add_no_cache_headers(response):
+    # Allow caching for static assets to improve load performance
+    try:
+        path = request.path or ""
+    except Exception:
+        path = ""
+    if path.startswith('/static/'):
+        return response
     # Prevent caching to avoid back navigation showing protected content after logout
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0, private"
     response.headers["Pragma"] = "no-cache"
@@ -199,13 +211,70 @@ def dashboard():
     jwt_data = get_jwt()
     email = jwt_data.get("email")
     name = jwt_data.get("name")
-    return render_template("dashboard.html", title="대시보드", name=name, email=email, identity=identity, hide_top_nav=True)
+    # SSR: initial page render for faster FCP
+    # Fetch first page items for this user
+    user_id = ObjectId(identity)
+    sort_spec = [("created_at", -1), ("_id", -1)]
+    cur = posts.find({"user_id": user_id}).sort(sort_spec).limit(10)
+    items = []
+    kst = ZoneInfo("Asia/Seoul")
+    for doc in cur:
+        # Build date
+        date_text = None
+        dt = doc.get("created_at")
+        if isinstance(dt, datetime):
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            date_text = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+        # Build plain-text preview and first image
+        contents = doc.get("contents", "")
+        first_img = None
+        md_img = re.search(r'!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)', contents)
+        if md_img:
+            first_img = md_img.group(1)
+        else:
+            html_img = re.search(r'<img[^>]+src="([^"]+)"', contents, flags=re.IGNORECASE)
+            if html_img:
+                first_img = html_img.group(1)
+        # strip URLs and markup to pure text
+        text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', contents)  # images
+        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'\1', text)  # links -> text
+        text = re.sub(r'\b(?:https?://|www\.)[^\s)]+', '', text)  # raw urls
+        text = re.sub(r'`{1,3}[^`]*`{1,3}', lambda m: m.group(0).replace('`', ''), text)  # code ticks
+        text = re.sub(r'[\*_~]{1,3}([^\*_~]+)[\*_~]{1,3}', r'\1', text)  # bold/italic/strike
+        text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)  # headings
+        text = re.sub(r'^\s{0,3}>\s?', '', text, flags=re.MULTILINE)  # blockquote
+        text = re.sub(r'^\s*(?:[-*+]|\d+\.)\s+', '', text, flags=re.MULTILINE)  # lists
+        text = re.sub(r'<[^>]+>', '', text)  # html tags
+        text = re.sub(r'\s+', ' ', text).strip()
+
+        items.append({
+            "id": str(doc.get("_id")),
+            "category": doc.get("category"),
+            "title": doc.get("title", ""),
+            "contents_text": text,
+            "first_image": first_img,
+            "date_text": date_text,
+        })
+    return render_template(
+        "dashboard.html",
+        title="대시보드",
+        name=name,
+        email=email,
+        identity=identity,
+        hide_top_nav=True,
+        initial_items=items,
+    )
 
 
 # ---- Chat: views & APIs ----
 
 def get_categories():
-    return ["사회","경제","과학","문화","기술","환경","스포츠","생활","역사","철학","기타"]
+    # Chat 등에서 사용하는 기본 카테고리(전체 제외)
+    return [
+        "프로그래밍언어","자료구조","알고리즘","컴퓨터구조","운영체제",
+        "시스템프로그래밍","데이터베이스","AI","보안","네트워크","기타"
+    ]
 
 
 @app.get("/chat")
@@ -598,8 +667,16 @@ def api_posts():
 @app.get("/post/new")
 @jwt_required()
 def post_new_get():
-    categories = ["전체","사회","경제","과학","문화","기술","환경","스포츠","생활","역사","철학","기타"]
-    return render_template("post_new.html", title="새 글 작성", categories=[c for c in categories if c != "전체"], hide_top_nav=True)
+    categories = [
+        "전체","프로그래밍언어","자료구조","알고리즘","컴퓨터구조","운영체제",
+        "시스템프로그래밍","데이터베이스","AI","보안","네트워크","기타"
+    ]
+    return render_template(
+        "post_new.html",
+        title="새 글 작성",
+        categories=[c for c in categories if c != "전체"],
+        hide_top_nav=True,
+    )
 
 
 @app.post("/post/new")
@@ -694,6 +771,25 @@ def post_detail(id):
     # 댓글 리스트 생성 완료 후, 추천수 기준 상위 3개 추출 (추천수 1 이상만)
     best_comments = [c for c in comment_list if c["like_count"] > 0]
     best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+    # Optional server-side markdown render for faster first paint
+    html_sanitized = None
+    try:
+        md_src = doc.get("contents", "") or ""
+        if md_src:
+            html_raw = markdown2.markdown(md_src)
+            # sanitize
+            html_sanitized = bleach.clean(
+                html_raw,
+                tags=[
+                    'p','br','strong','em','ul','ol','li','blockquote','code','pre','h1','h2','h3','h4','h5','h6','hr','table','thead','tbody','tr','th','td','span','del','ins','sup','sub','a','img'
+                ],
+                attributes={'a': ['href','title','rel','target'], 'img': ['src','alt','title'], 'span': ['class']},
+                protocols=['http','https','mailto'],
+                strip=True
+            )
+    except Exception as e:
+        print('[warn] ssr markdown failed:', e)
+
     return render_template(
         "post_detail.html",
         title="글 상세",
@@ -702,6 +798,7 @@ def post_detail(id):
             "category": doc.get("category"),
             "title": doc.get("title", ""),
             "contents": doc.get("contents", ""),
+            "contents_html": html_sanitized,
             "date_text": date_text,
             "url": url,
         },
@@ -741,7 +838,10 @@ def post_edit_get(id):
     if not doc:
         flash("요청한 글을 찾을 수 없습니다.", "error")
         return redirect(url_for("dashboard"))
-    categories = [c for c in ["사회","경제","과학","문화","기술","환경","스포츠","생활","역사","철학","기타"]]
+    categories = [
+        "프로그래밍언어","자료구조","알고리즘","컴퓨터구조","운영체제",
+        "시스템프로그래밍","데이터베이스","AI","보안","네트워크","기타"
+    ]
     # Normalize post object similar to detail view (use string id)
     post_obj = {
         "id": str(doc.get("_id")),
@@ -1188,6 +1288,48 @@ def api_session_status():
         "email": j.get("email"),
         "name": j.get("name"),
     }), 200
+
+
+@app.post("/api/uploads/images")
+@jwt_required()
+def api_upload_image():
+    """개발용: 이미지를 static/uploads/yyyy/mm 경로에 저장하고 URL을 반환합니다.
+    Returns { ok: bool, url?: str, error?: str }
+    """
+    # 파일 추출
+    f = (request.files.get("image") or request.files.get("file"))
+    if not f:
+        return jsonify({"ok": False, "error": "no_file"}), 400
+    # 간단한 타입/크기 검증
+    ct = (f.mimetype or "").lower()
+    if not ct.startswith("image/"):
+        return jsonify({"ok": False, "error": "bad_type"}), 400
+    max_size = 5 * 1024 * 1024  # 5MB
+    try:
+        clen = request.content_length or 0
+        if clen and clen > max_size + 1024:  # 약간의 여유
+            return jsonify({"ok": False, "error": "too_large"}), 400
+    except Exception:
+        pass
+    # 저장 경로 구성
+    now = datetime.now(timezone.utc)
+    yyyy = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y")
+    mm = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%m")
+    upload_dir = os.path.join(app.root_path, "static", "uploads", yyyy, mm)
+    os.makedirs(upload_dir, exist_ok=True)
+    # 파일명 안전 처리 + uuid
+    orig = secure_filename(f.filename or "image")
+    base, ext = os.path.splitext(orig)
+    if not ext:
+        # 확장자 유추 실패 시 기본값
+        ext = ".png" if "/png" in ct else (".jpg" if "/jpeg" in ct else ".img")
+    fname = f"{uuid4().hex}{ext}"
+    abs_path = os.path.join(upload_dir, fname)
+    f.save(abs_path)
+    # 정적 URL 반환
+    rel = f"uploads/{yyyy}/{mm}/{fname}"
+    url = url_for('static', filename=rel, _external=False)
+    return jsonify({"ok": True, "url": url}), 200
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
