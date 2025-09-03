@@ -93,7 +93,8 @@ def post_comments(id):
         '  <form action="' + url_for('comments.comment_delete', comment_id="__CID__") + '" method="post" onsubmit="return confirm(\'댓글을 삭제하시겠습니까?\');">'
         '    <button class="text-red-600 text-xs px-2 py-1 rounded">삭제</button>'
         '  </form>'
-        '</div>'
+        '</div>',
+        c=c
     ).replace("__CID__", c["id"])  # 간단 치환
 
     best_html = _best_comments_html(post_id)
