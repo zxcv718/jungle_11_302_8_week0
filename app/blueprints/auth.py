@@ -14,6 +14,7 @@ from flask_jwt_extended import (
 )
 from datetime import datetime, timezone, timedelta
 from ..extensions import mongo
+from bson.objectid import ObjectId
 from ..extensions.mail import mail
 from flask_mail import Message
 import random
@@ -107,9 +108,15 @@ def register_post():
         return redirect(url_for("auth.register_get"))
 
     pw_hash = generate_password_hash(password)
-    mongo._db.users.insert_one(
+    res = mongo._db.users.insert_one(
         {"email": email, "name": name, "password": pw_hash, "created_at": datetime.now(timezone.utc), "liked_posts": [], "subscriptions": []}
     )
+    # create session document separately to avoid altering users schema
+    try:
+        mongo._db.user_sessions.insert_one({"user_id": res.inserted_id, "session_version": 1})
+    except Exception:
+        # best-effort: ignore if insert fails (e.g., permissions)
+        pass
     
     # 사용된 인증 코드 삭제
     mongo._db.verifications.delete_one({"email": email})
@@ -148,8 +155,17 @@ def login_post():
         flash("이메일 또는 비밀번호가 올바르지 않습니다.", "error")
         return redirect(url_for("auth.login_get"))
 
+    # Increment session_version in separate collection so we don't touch users schema
+    try:
+        mongo._db.user_sessions.update_one({"user_id": user["_id"]}, {"$inc": {"session_version": 1}}, upsert=True)
+    except Exception:
+        # ignore write failures here (conservative approach: token will be considered invalid later)
+        pass
+    session_doc = mongo._db.user_sessions.find_one({"user_id": user["_id"]})
+    session_version = session_doc.get("session_version", 1) if session_doc else 1
+
     identity = str(user.get("_id"))
-    claims = {"email": user["email"], "name": user.get("name", "")}
+    claims = {"email": user["email"], "name": user.get("name", ""), "session_version": session_version}
 
     access_token = create_access_token(identity=identity, additional_claims=claims)
     refresh_token = create_refresh_token(identity=identity, additional_claims=claims)
@@ -168,7 +184,9 @@ def refresh():
     email = jwt_data.get("email")
     name = jwt_data.get("name")
 
-    new_access = create_access_token(identity=identity, additional_claims={"email": email, "name": name})
+    # Preserve session_version when issuing a new access token from a valid refresh token
+    session_version = jwt_data.get("session_version")
+    new_access = create_access_token(identity=identity, additional_claims={"email": email, "name": name, "session_version": session_version})
 
     resp = make_response({"msg": "access token refreshed"})
     set_access_cookies(resp, new_access)
@@ -237,6 +255,24 @@ def handle_expired(jwt_header, jwt_payload):
 </body></html>
 """ % (url_for('auth.refresh'), orig, url_for('auth.login_get'), url_for('auth.login_get'))
     return html, 401, {"Content-Type": "text/html; charset=utf-8"}
+
+
+@jwt.revoked_token_loader
+def handle_revoked(jwt_header, jwt_payload):
+    """When a token is considered revoked (we used token_in_blocklist_loader),
+    behave like the user clicked logout: clear cookies and redirect to login for
+    browser requests; return JSON 401 for API/refresh endpoints.
+    """
+    from flask import request
+    # For API or refresh endpoints return JSON so client-side JS can handle it
+    if request.path.startswith("/api") or request.path.startswith("/refresh"):
+        return jsonify({"error": "token_revoked"}), 401
+
+    # For normal browser flows, clear cookies and redirect to login (same as logout)
+    resp = make_response(redirect(url_for("auth.login_get")))
+    unset_jwt_cookies(resp)
+    flash("로그아웃되었습니다.", "success")
+    return resp
 
 
 @bp.get("/api/session-status")
