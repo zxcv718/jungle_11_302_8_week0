@@ -82,26 +82,27 @@ if os.getenv("SKIP_INDEX", "0") != "1":
 
 @app.get("/")
 def root():
-    all_posts = []
     user_info = None
+    current_user_doc = None
     try:
         verify_jwt_in_request(optional=True)
         identity = get_jwt_identity()
         if identity:
-            jwt_data = get_jwt()
-            user_info = {
-                "id": identity,
-                "name": jwt_data.get("name"),
-                "email": jwt_data.get("email"),
-            }
+            uid = ObjectId(identity)
+            current_user_doc = users.find_one({"_id": uid})
+            if current_user_doc:
+                jwt_data = get_jwt()
+                user_info = {
+                    "id": identity,
+                    "name": jwt_data.get("name"),
+                    "email": jwt_data.get("email"),
+                }
     except Exception:
-        # Not logged in or other JWT error, user_info remains None
         pass
 
-    # Fetch all posts
-    cur = posts.find({}).sort([("created_at", -1)])
     kst = ZoneInfo("Asia/Seoul")
-    for doc in cur:
+
+    def process_post_doc(doc):
         dt = doc.get("created_at")
         date_text = None
         if isinstance(dt, datetime):
@@ -109,8 +110,8 @@ def root():
                 dt = dt.replace(tzinfo=timezone.utc)
             kst_dt = dt.astimezone(kst)
             date_text = kst_dt.strftime("%Y-%m-%d %H:%M")
-
-        all_posts.append({
+        
+        return {
             "id": str(doc.get("_id")),
             "category": doc.get("category"),
             "title": doc.get("title", ""),
@@ -118,9 +119,57 @@ def root():
             "contents": doc.get("contents", ""),
             "date_text": date_text,
             "meta": doc.get("meta", {}),
-        })
+            "like_count": doc.get("like_count", 0),
+        }
 
-    return render_template("home.html", posts=all_posts, user_info=user_info)
+    # 전체 글 (추천 수 많은 순으로 자동 정렬)
+    pipeline_all = [
+        {"$project": {
+            "user_id": 1, "category": 1, "title": 1, "url": 1, "contents": 1, "created_at": 1, "meta": 1,
+            "like_count": {"$size": {"$ifNull": ["$likes", []]}}
+        }},
+        {"$sort": {"like_count": -1, "created_at": -1}},
+        {"$limit": 10} # 전체 글 목록을 10개로 제한
+    ]
+    sorted_posts = [process_post_doc(doc) for doc in posts.aggregate(pipeline_all)]
+
+    # 캐러셀을 위한 인기글 Top 5
+    popular_posts = sorted_posts[:5]
+
+    # 전체 글 목록 (Top 5 제외)
+    all_posts = sorted_posts[5:]
+
+    # 구독한 저자 글 (로그인 시)
+    subscribed_posts = []
+    if current_user_doc:
+        subscribed_author_ids = current_user_doc.get("subscriptions", [])
+        if subscribed_author_ids:
+            # 구독한 저자의 글만 필터링하여 최신순으로 정렬
+            sub_pipeline = [
+                {"$match": {"user_id": {"$in": subscribed_author_ids}}},
+                {"$sort": {"created_at": -1}},
+                {"$project": {
+                    "category": 1, "title": 1, "url": 1, "contents": 1, "created_at": 1, "meta": 1,
+                    "like_count": {"$size": {"$ifNull": ["$likes", []]}}
+                }},
+            ]
+            subscribed_posts = [process_post_doc(doc) for doc in posts.aggregate(sub_pipeline)]
+
+    # 인기글에 대한 메타데이터(이미지)를 가져와 채워줍니다.
+    for post in popular_posts:
+        if post.get("url"):
+            meta = fetch_and_extract_metadata(post["url"])
+            post["meta"] = {
+                "image": meta.image
+            }
+
+    return render_template(
+        "home.html", 
+        posts=all_posts,  # 전체 글 목록 (Top 5 제외)
+        subscribed_posts=subscribed_posts, # 구독 글 목록
+        popular_posts=popular_posts, # 인기글 Top 5
+        user_info=user_info
+    )
 
 
 @app.get("/register")
@@ -129,7 +178,7 @@ def register_get():
     try:
         verify_jwt_in_request(optional=True)
         if get_jwt_identity():
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("root"))
     except Exception:
         pass
     return render_template("register.html", title="회원가입")
@@ -155,7 +204,7 @@ def register_post():
 
     pw_hash = generate_password_hash(password)
     users.insert_one(
-        {"email": email, "name": name, "password": pw_hash, "created_at": datetime.now(timezone.utc)}
+        {"email": email, "name": name, "password": pw_hash, "created_at": datetime.now(timezone.utc), "liked_posts": [], "subscriptions": []}
     )
     flash("가입이 완료되었습니다. 로그인해주세요.", "success")
     return redirect(url_for("login_get"))
@@ -176,7 +225,7 @@ def login_get():
     try:
         verify_jwt_in_request(optional=True)
         if get_jwt_identity():
-            return redirect(url_for("dashboard"))
+            return redirect(url_for("root"))
     except Exception:
         pass
     return render_template("login.html", title="로그인")
@@ -198,7 +247,7 @@ def login_post():
     access_token = create_access_token(identity=identity, additional_claims=claims)
     refresh_token = create_refresh_token(identity=identity, additional_claims=claims)
 
-    resp = make_response(redirect(url_for("dashboard")))
+    resp = make_response(redirect(url_for("root")))
     set_access_cookies(resp, access_token)
     set_refresh_cookies(resp, refresh_token)
     return resp
@@ -707,6 +756,7 @@ def post_new_post():
         "url": url,
         "contents": contents,
         "created_at": now_utc,
+        "likes": [],
     })
     flash("글이 등록되었습니다.", "success")
     return redirect(url_for("dashboard"))
@@ -715,16 +765,44 @@ def post_new_post():
 @app.get("/post/<id>")
 @jwt_required(optional=True)
 def post_detail(id):
-    # Verify ownership
     try:
         oid = ObjectId(id)
     except Exception:
         abort(404)
-    uid = ObjectId(get_jwt_identity())
-    doc = posts.find_one({"_id": oid, "user_id": uid})
+
+    doc = posts.find_one({"_id": oid})
     if not doc:
         flash("요청한 글을 찾을 수 없습니다.", "error")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("root"))
+
+    # 글 작성자 정보 조회
+    author = users.find_one({"_id": doc["user_id"]})
+
+    # 현재 로그인 사용자 정보 및 상태
+    current_user = None
+    is_liked = False
+    is_subscribed = False
+    identity = get_jwt_identity()
+    if identity:
+        uid = ObjectId(identity)
+        user_doc = users.find_one({"_id": uid})
+        if user_doc:
+            jwt_data = get_jwt()
+            current_user = {
+                "id": str(uid),
+                "name": jwt_data.get("name"),
+                "email": jwt_data.get("email"),
+            }
+            # Robust check for likes (handles both ObjectId and string)
+            likes_list = doc.get("likes", [])
+            if uid in likes_list or str(uid) in likes_list:
+                is_liked = True
+            
+            # Robust check for subscriptions (handles both ObjectId and string)
+            if author:
+                subscriptions_list = user_doc.get("subscriptions", [])
+                if author["_id"] in subscriptions_list or str(author["_id"]) in subscriptions_list:
+                    is_subscribed = True
 
     # Build KST date text
     kst = ZoneInfo("Asia/Seoul")
@@ -739,21 +817,10 @@ def post_detail(id):
 
     url = doc.get("url") or ""
     meta = fetch_and_extract_metadata(url) if url else None
-    # 현재 로그인 사용자 정보
-    try:
-        verify_jwt_in_request(optional=True)
-        jwt_data = get_jwt()
-        current_user = {
-            "id": str(get_jwt_identity()),
-            "name": jwt_data.get("name"),
-            "email": jwt_data.get("email"),
-        }
-    except Exception:
-        current_user = None
+    
     # 댓글 리스트: DB에서 해당 게시글의 댓글을 조회 (최신순)
     comment_cur = comments.find({"post_id": oid}).sort("created_at", -1) 
     comment_list = []
-    kst = ZoneInfo("Asia/Seoul")
     for c in comment_cur:
         user = users.find_one({"_id": c["user_id"]})
         dt = c["created_at"]
@@ -771,6 +838,9 @@ def post_detail(id):
     # 댓글 리스트 생성 완료 후, 추천수 기준 상위 3개 추출 (추천수 1 이상만)
     best_comments = [c for c in comment_list if c["like_count"] > 0]
     best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+<<<<<<< HEAD:app.py
+    
+=======
     # Optional server-side markdown render for faster first paint
     html_sanitized = None
     try:
@@ -790,6 +860,7 @@ def post_detail(id):
     except Exception as e:
         print('[warn] ssr markdown failed:', e)
 
+>>>>>>> c7b6ab1e44d7bdb4992a243530802aabd2a1ebdc:legacy_removed/app.py.bak
     return render_template(
         "post_detail.html",
         title="글 상세",
@@ -801,13 +872,75 @@ def post_detail(id):
             "contents_html": html_sanitized,
             "date_text": date_text,
             "url": url,
+            "like_count": len(doc.get("likes", [])),
+            "author": {
+                "id": str(author["_id"]),
+                "name": author.get("name", "알 수 없음")
+            } if author else None
         },
         meta=meta,
         hide_top_nav=True,
         current_user=current_user,
+        is_liked=is_liked,
+        is_subscribed=is_subscribed,
         comments=comment_list,
         best_comments=best_comments,
     )
+
+@app.post("/post/<id>/like")
+@jwt_required()
+def post_like(id):
+    try:
+        oid = ObjectId(id)
+        uid = ObjectId(get_jwt_identity())
+    except Exception:
+        return jsonify({"ok": False, "message": "잘못된 요청입니다."}), 400
+
+    post = posts.find_one({"_id": oid})
+    if not post:
+        return jsonify({"ok": False, "message": "글을 찾을 수 없습니다."}), 404
+
+    if uid in post.get("likes", []):
+        # Unlike
+        posts.update_one({"_id": oid}, {"$pull": {"likes": uid}})
+        users.update_one({"_id": uid}, {"$pull": {"liked_posts": oid}})
+        action = "unliked"
+    else:
+        # Like
+        posts.update_one({"_id": oid}, {"$push": {"likes": uid}})
+        users.update_one({"_id": uid}, {"$push": {"liked_posts": oid}})
+        action = "liked"
+
+    new_like_count = len(posts.find_one({"_id": oid}).get("likes", []))
+    return jsonify({"ok": True, "action": action, "like_count": new_like_count})
+
+
+@app.post("/user/<id>/subscribe")
+@jwt_required()
+def user_subscribe(id):
+    try:
+        author_id = ObjectId(id)
+        subscriber_id = ObjectId(get_jwt_identity())
+    except Exception:
+        return jsonify({"ok": False, "message": "잘못된 요청입니다."}), 400
+
+    if author_id == subscriber_id:
+        return jsonify({"ok": False, "message": "스스로를 구독할 수 없습니다."}), 400
+
+    subscriber = users.find_one({"_id": subscriber_id})
+    if not subscriber:
+        return jsonify({"ok": False, "message": "사용자를 찾을 수 없습니다."}), 404
+
+    if author_id in subscriber.get("subscriptions", []):
+        # Unsubscribe
+        users.update_one({"_id": subscriber_id}, {"$pull": {"subscriptions": author_id}})
+        action = "unsubscribed"
+    else:
+        # Subscribe
+        users.update_one({"_id": subscriber_id}, {"$push": {"subscriptions": author_id}})
+        action = "subscribed"
+
+    return jsonify({"ok": True, "action": action})
 
 
 @app.post("/post/<id>/delete")

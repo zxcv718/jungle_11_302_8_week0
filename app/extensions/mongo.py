@@ -1,18 +1,19 @@
 from pymongo import MongoClient
 from pymongo.errors import ConfigurationError
-
 client = None
 _db = None
-
-
+# Public alias so callers can use `mongo.db` (in addition to legacy `mongo._db`).
+db = None
 def init_mongo(app):
-    global client, _db
+    global client, _db, db
     client = MongoClient(app.config["MONGO_URI"])  # SRV or standard URI
     try:
         db = client.get_default_database()
     except ConfigurationError:
         db = None
     _db = db if db is not None else client["login"]
+    # Keep public alias in sync
+    globals()["db"] = _db
     # Expose collections on app.extensions for easy import until repos added
     app.extensions["mongo"] = {
         "client": client,
@@ -31,5 +32,5 @@ def init_mongo(app):
         app.extensions["mongo"]["chat_rooms"].create_index([("category", 1), ("name", 1)])
         app.extensions["mongo"]["chat_messages"].create_index([("room_id", 1), ("created_at", -1)])
     except Exception:
-        # Don't crash if index creation fails (e.g., permissions)
+        # Don’t crash if index creation fails (e.g., permissions)
         pass

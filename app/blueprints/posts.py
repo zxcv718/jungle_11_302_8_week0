@@ -14,6 +14,8 @@ from uuid import uuid4
 from urllib.parse import urlparse
 import os
 
+from metadata import fetch_and_extract_metadata, normalize_url
+
 bp = Blueprint("posts", __name__)
 
 
@@ -80,46 +82,76 @@ def post_new_post():
     title = request.form.get("title", "").strip()
     url = request.form.get("url", "").strip()
     contents = request.form.get("contents", "").strip()
+    # Basic validation: require non-empty and proper URL scheme and category not '선택'
     if not title or not contents or not category or category == "선택":
         flash("카테고리, 제목, 내용을 입력하세요.", "error")
-        return redirect(url_for("posts.post_new_get"))
+        return redirect(url_for("post_new_get"))
     try:
         pu = urlparse(url)
         if pu.scheme not in ("http", "https") or not pu.netloc:
             raise ValueError("invalid url")
     except Exception:
         flash("유효한 URL을 입력하세요.", "error")
-        return redirect(url_for("posts.post_new_get"))
+        return redirect(url_for("post_new_get"))
+    # Store created_at to comply with Atlas validator; avoid extra fields
     now_utc = datetime.now(timezone.utc)
-    mongo._db["posts"].insert_one({
+    mongo._db.posts.insert_one({
         "user_id": user_id,
         "category": category,
         "title": title,
         "url": url,
         "contents": contents,
         "created_at": now_utc,
+        "likes": [],
     })
     flash("글이 등록되었습니다.", "success")
     return redirect(url_for("posts.dashboard"))
 
 
+
 @bp.get("/post/<id>")
-@jwt_required()
+@jwt_required(optional=True)
 def post_detail(id):
     try:
         oid = ObjectId(id)
     except Exception:
-        return redirect(url_for("posts.dashboard"))
-    uid_str = get_jwt_identity()
-    try:
-        uid = ObjectId(uid_str)
-    except Exception:
-        flash("권한이 없습니다.", "error")
-        return redirect(url_for("posts.dashboard"))
-    doc = mongo._db["posts"].find_one({"_id": oid, "user_id": uid})
+        abort(404)
+
+    doc = mongo._db.posts.find_one({"_id": oid})
     if not doc:
         flash("요청한 글을 찾을 수 없습니다.", "error")
-        return redirect(url_for("posts.dashboard"))
+        return redirect(url_for("home.root"))
+
+    # 글 작성자 정보 조회
+    author = mongo._db.users.find_one({"_id": doc["user_id"]})
+
+    # 현재 로그인 사용자 정보 및 상태
+    current_user = None
+    is_liked = False
+    is_subscribed = False
+    identity = get_jwt_identity()
+    if identity:
+        uid = ObjectId(identity)
+        user_doc = mongo._db.users.find_one({"_id": uid})
+        if user_doc:
+            jwt_data = get_jwt()
+            current_user = {
+                "id": str(uid),
+                "name": jwt_data.get("name"),
+                "email": jwt_data.get("email"),
+            }
+            # Robust check for likes (handles both ObjectId and string)
+            likes_list = doc.get("likes", [])
+            if uid in likes_list or str(uid) in likes_list:
+                is_liked = True
+            
+            # Robust check for subscriptions (handles both ObjectId and string)
+            if author:
+                subscriptions_list = user_doc.get("subscriptions", [])
+                if author["_id"] in subscriptions_list or str(author["_id"]) in subscriptions_list:
+                    is_subscribed = True
+
+    # Build KST date text
     kst = ZoneInfo("Asia/Seoul")
     date_text = None
     dt = doc.get("created_at")
@@ -127,22 +159,17 @@ def post_detail(id):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         date_text = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+    else:
+        date_text = None
+
     url = doc.get("url") or ""
-    # 메타데이터는 기존 metadata 모듈 재사용
-    from metadata import fetch_and_extract_metadata
     meta = fetch_and_extract_metadata(url) if url else None
-    # 로그인 사용자 정보
-    try:
-        verify_jwt_in_request(optional=True)
-        jwt_data = get_jwt()
-        current_user = {"id": str(get_jwt_identity()), "name": jwt_data.get("name"), "email": jwt_data.get("email")}
-    except Exception:
-        current_user = None
-    # 댓글 목록
-    comment_cur = mongo._db["comments"].find({"post_id": oid}).sort("created_at", -1)
+    
+    # 댓글 리스트: _DB에서 해당 게시글의 댓글을 조회 (최신순)
+    comment_cur = mongo._db.comments.find({"post_id": oid}).sort("created_at", -1) 
     comment_list = []
     for c in comment_cur:
-        user = mongo._db["users"].find_one({"_id": c["user_id"]})
+        user = mongo._db.users.find_one({"_id": c["user_id"]})
         dt = c["created_at"]
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -155,19 +182,88 @@ def post_detail(id):
             "created_at": created_at_kst,
             "like_count": len(c.get("likes", [])),
         })
+    # 댓글 리스트 생성 완료 후, 추천수 기준 상위 3개 추출 (추천수 1 이상만)
     best_comments = [c for c in comment_list if c["like_count"] > 0]
     best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
-    html_sanitized = render_markdown_sanitized(doc.get("contents", ""))
-    return render_template("post_detail.html", title="글 상세", post={
-        "id": str(doc.get("_id")),
-        "category": doc.get("category"),
-        "title": doc.get("title", ""),
-        "contents": doc.get("contents", ""),
-        "contents_html": html_sanitized,
-        "date_text": date_text,
-        "url": url,
-    }, meta=meta, hide_top_nav=True, current_user=current_user, comments=comment_list, best_comments=best_comments)
+    
+    return render_template(
+        "post_detail.html",
+        title="글 상세",
+        post={
+            "id": str(doc.get("_id")),
+            "category": doc.get("category"),
+            "title": doc.get("title", ""),
+            "contents": doc.get("contents", ""),
+            "date_text": date_text,
+            "url": url,
+            "like_count": len(doc.get("likes", [])),
+            "author": {
+                "id": str(author["_id"]),
+                "name": author.get("name", "알 수 없음")
+            } if author else None
+        },
+        meta=meta,
+        hide_top_nav=True,
+        current_user=current_user,
+        is_liked=is_liked,
+        is_subscribed=is_subscribed,
+        comments=comment_list,
+        best_comments=best_comments,
+    )
 
+@bp.post("/post/<id>/like")
+@jwt_required()
+def post_like(id):
+    try:
+        oid = ObjectId(id)
+        uid = ObjectId(get_jwt_identity())
+    except Exception:
+        return jsonify({"ok": False, "message": "잘못된 요청입니다."}), 400
+
+    post = mongo._db.posts.find_one({"_id": oid})
+    if not post:
+        return jsonify({"ok": False, "message": "글을 찾을 수 없습니다."}), 404
+
+    if uid in post.get("likes", []):
+        # Unlike
+        mongo._db.posts.update_one({"_id": oid}, {"$pull": {"likes": uid}})
+        mongo._db.users.update_one({"_id": uid}, {"$pull": {"liked_posts": oid}})
+        action = "unliked"
+    else:
+        # Like
+        mongo._db.posts.update_one({"_id": oid}, {"$push": {"likes": uid}})
+        mongo._db.users.update_one({"_id": uid}, {"$push": {"liked_posts": oid}})
+        action = "liked"
+
+    new_like_count = len(mongo._db.posts.find_one({"_id": oid}).get("likes", []))
+    return jsonify({"ok": True, "action": action, "like_count": new_like_count})
+
+@bp.post("/user/<id>/subscribe")
+@jwt_required()
+def user_subscribe(id):
+    try:
+        author_id = ObjectId(id)
+        subscriber_id = ObjectId(get_jwt_identity())
+    except Exception:
+        return jsonify({"ok": False, "message": "잘못된 요청입니다."}), 400
+
+    if author_id == subscriber_id:
+        return jsonify({"ok": False, "message": "스스로를 구독할 수 없습니다."}), 400
+
+    subscriber = mongo._db.users.find_one({"_id": subscriber_id})
+    if not subscriber:
+        return jsonify({"ok": False, "message": "사용자를 찾을 수 없습니다."}), 404
+
+    if author_id in subscriber.get("subscriptions", []):
+        # Unsubscribe
+        mongo._db.users.update_one({"_id": subscriber_id}, {"$pull": {"subscriptions": author_id}})
+        action = "unsubscribed"
+    else:
+        # Subscribe
+        mongo._db.users.update_one({"_id": subscriber_id}, {"$push": {"subscriptions": author_id}})
+        action = "subscribed"
+
+    return jsonify({"ok": True, "action": action})
 
 @bp.get("/post/<id>/edit")
 @jwt_required()
@@ -342,7 +438,6 @@ def api_posts():
 
 @bp.get("/api/preview-url")
 def api_preview_url():
-    from metadata import fetch_and_extract_metadata, normalize_url
     raw = request.args.get("url", "").strip()
     if not raw:
         return jsonify({"ok": False, "error": "empty"}), 400

@@ -15,11 +15,11 @@ def main():
         return 1
 
     client = MongoClient(uri)
-    db = client.get_default_database()
-    if db is None:
-        db = client["login"]
-    users = db["users"]
-    posts = db["posts"]
+    _db = client.get_default_database()
+    if _db is None:
+        _db = client["login"]
+    users = _db["users"]
+    posts = _db["posts"]
 
     try:
         posts.create_index([("user_id", 1), ("created_at", -1)])
