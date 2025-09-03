@@ -35,11 +35,11 @@ def chat_category(category):
 def chat_room(category, room_id):
     if category not in get_categories():
         abort(404)
-    room = mongo._db["chat_rooms"].find_one({"_id": ObjectId(room_id), "category": category})
+    room = mongo.db["chat_rooms"].find_one({"_id": ObjectId(room_id), "category": category})
     if not room:
         abort(404)
     ident = get_jwt_identity()
-    user = mongo._db["users"].find_one({"_id": ObjectId(ident)})
+    user = mongo.db["users"].find_one({"_id": ObjectId(ident)})
     name = user.get("name") if user else "익명"
     return render_template("chat_room.html", title=f"{room.get('name')} - {category}", category=category, room={"id": room_id, "name": room.get("name")}, me_name=name, me_id=str(ident), hide_top_nav=True)
 
@@ -50,7 +50,7 @@ def chat_room(category, room_id):
 def api_list_rooms(category):
     if category not in get_categories():
         return jsonify({"rooms": []}), 200
-    cur = mongo._db["chat_rooms"].find({"category": category}).sort([("_id", -1)])
+    cur = mongo.db["chat_rooms"].find({"category": category}).sort([("_id", -1)])
     out = []
     for doc in cur:
         rid = str(doc.get("_id"))
@@ -68,7 +68,7 @@ def api_create_room(category):
     if not name:
         return jsonify({"error": "name_required"}), 400
     doc = {"category": category, "name": name, "created_at": datetime.now(timezone.utc)}
-    res = mongo._db["chat_rooms"].insert_one(doc)
+    res = mongo.db["chat_rooms"].insert_one(doc)
     return jsonify({"id": str(res.inserted_id)}), 200
 
 
@@ -85,7 +85,7 @@ def api_room_messages(category, room_id):
         limit = min(200, max(1, int(request.args.get("limit", 50))))
     except ValueError:
         limit = 50
-    cur = mongo._db["chat_messages"].find({"room_id": rid}).sort([("created_at", -1)]).limit(limit)
+    cur = mongo.db["chat_messages"].find({"room_id": rid}).sort([("created_at", -1)]).limit(limit)
     items = []
     for m in cur:
         items.append({
@@ -119,7 +119,7 @@ def api_send_message(category, room_id):
         rid_obj = ObjectId(room_id)
     except Exception:
         return jsonify({"error": "bad_room"}), 400
-    if not mongo._db["chat_rooms"].find_one({"_id": rid_obj, "category": category}):
+    if not mongo.db["chat_rooms"].find_one({"_id": rid_obj, "category": category}):
         return jsonify({"error": "not_found"}), 404
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
@@ -133,7 +133,7 @@ def api_send_message(category, room_id):
     created = datetime.now(timezone.utc)
     doc = {"room_id": rid_obj, "user_id": uid, "name": name, "text": text, "created_at": created}
     try:
-        res = mongo._db["chat_messages"].insert_one(doc)
+        res = mongo.db["chat_messages"].insert_one(doc)
         mid = str(res.inserted_id)
     except Exception:
         mid = None
@@ -187,7 +187,7 @@ def ws_join(data):
     if not rid:
         return
     try:
-        room_doc = mongo._db["chat_rooms"].find_one({"_id": ObjectId(rid)})
+        room_doc = mongo.db["chat_rooms"].find_one({"_id": ObjectId(rid)})
     except Exception:
         room_doc = None
     if not room_doc:

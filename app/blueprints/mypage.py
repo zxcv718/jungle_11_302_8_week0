@@ -12,7 +12,7 @@ mypage_bp = Blueprint("mypage", __name__)
 @jwt_required()
 def mypage():
     user_id = ObjectId(get_jwt_identity())
-    user = mongo._db["users"].find_one({"_id": user_id})
+    user = mongo.db["users"].find_one({"_id": user_id})
     kst = ZoneInfo("Asia/Seoul")
     created_at = user.get("created_at")
     if created_at and created_at.tzinfo is None:
@@ -23,7 +23,7 @@ def mypage():
         "created_at": created_at.astimezone(kst).strftime("%Y-%m-%d %H:%M") if created_at else None
     }
     my_posts = []
-    for p in mongo._db["posts"].find({"user_id": user_id}).sort("created_at", -1):
+    for p in mongo.db["posts"].find({"user_id": user_id}).sort("created_at", -1):
         dt = p.get("created_at")
         if dt and dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -33,7 +33,7 @@ def mypage():
             "created_at": dt.astimezone(kst).strftime("%Y-%m-%d %H:%M") if dt else ""
         })
     my_comments = []
-    for c in mongo._db["comments"].find({"user_id": user_id}).sort("created_at", -1):
+    for c in mongo.db["comments"].find({"user_id": user_id}).sort("created_at", -1):
         dt = c.get("created_at")
         if dt and dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -49,9 +49,9 @@ def mypage():
 @jwt_required()
 def user_delete():
     user_id = ObjectId(get_jwt_identity())
-    mongo._db["users"].delete_one({"_id": user_id})
-    mongo._db["posts"].delete_many({"user_id": user_id})
-    mongo._db["comments"].delete_many({"user_id": user_id})
+    mongo.db["users"].delete_one({"_id": user_id})
+    mongo.db["posts"].delete_many({"user_id": user_id})
+    mongo.db["comments"].delete_many({"user_id": user_id})
     flash("회원 탈퇴가 완료되었습니다.", "success")
     resp = redirect(url_for("auth.login_get"))
     resp.delete_cookie("access_token_cookie")
@@ -65,7 +65,7 @@ def multi_post_delete():
     post_ids = request.form.getlist("post_ids")
     if post_ids:
         ids = [ObjectId(pid) for pid in post_ids]
-        mongo._db["posts"].delete_many({"_id": {"$in": ids}, "user_id": user_id})
+        mongo.db["posts"].delete_many({"_id": {"$in": ids}, "user_id": user_id})
         flash(f"{len(ids)}개의 글이 삭제되었습니다.", "success")
     return redirect(url_for("mypage.mypage"))
 
@@ -76,7 +76,7 @@ def multi_comment_delete():
     comment_ids = request.form.getlist("comment_ids")
     if comment_ids:
         ids = [ObjectId(cid) for cid in comment_ids]
-        mongo._db["comments"].delete_many({"_id": {"$in": ids}, "user_id": user_id})
+        mongo.db["comments"].delete_many({"_id": {"$in": ids}, "user_id": user_id})
         flash(f"{len(ids)}개의 댓글이 삭제되었습니다.", "success")
     return redirect(url_for("mypage.mypage"))
 
@@ -84,7 +84,7 @@ def multi_comment_delete():
 @jwt_required()
 def profile_edit():
     user_id = ObjectId(get_jwt_identity())
-    user = mongo._db["users"].find_one({"_id": user_id})
+    user = mongo.db["users"].find_one({"_id": user_id})
     return render_template("profile_edit.html", user=user)
 
 @mypage_bp.post("/profile/edit")
@@ -103,6 +103,6 @@ def profile_edit_post():
             flash("비밀번호가 일치하지 않습니다.", "error")
             return redirect(url_for("mypage.profile_edit"))
         update["password"] = generate_password_hash(password)
-    mongo._db["users"].update_one({"_id": user_id}, {"$set": update})
+    mongo.db["users"].update_one({"_id": user_id}, {"$set": update})
     flash("개인 정보가 변경되었습니다.", "success")
     return redirect(url_for("mypage.mypage"))

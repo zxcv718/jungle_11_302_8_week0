@@ -6,28 +6,7 @@ from bson import ObjectId
 
 # extensions와 utils에서 필요한 모듈을 임포트합니다.
 from ..extensions import mongo
-
-# Import fetch_and_extract_metadata robustly: metadata.py may be a top-level module
-# or available as app.metadata depending on how the app is executed. Provide a
-# safe fallback that returns an object with an `image` attribute when unavailable.
-try:
-    from metadata import fetch_and_extract_metadata
-except Exception:
-    try:
-        from app import metadata as _metadata
-        fetch_and_extract_metadata = _metadata.fetch_and_extract_metadata
-    except Exception:
-        # Fallback: return a simple object with .image = None to avoid crashing
-        class _MetaFallback:
-            def __init__(self, url=None):
-                self.image = None
-                self.title = None
-                self.description = None
-                self.content_type = None
-                self.url = url
-
-        def fetch_and_extract_metadata(url):
-            return _MetaFallback(url)
+from metadata import fetch_and_extract_metadata
 
 bp = Blueprint("home", __name__)
 

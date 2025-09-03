@@ -12,8 +12,8 @@ bp = Blueprint("comments", __name__)
 def _best_comments_html(post_id: ObjectId) -> str:
     kst = ZoneInfo("Asia/Seoul")
     items = []
-    for c in mongo._db["comments"].find({"post_id": post_id}):
-        user = mongo._db["users"].find_one({"_id": c["user_id"]})
+    for c in mongo.db["comments"].find({"post_id": post_id}):
+        user = mongo.db["users"].find_one({"_id": c["user_id"]})
         dt = c.get("created_at")
         if isinstance(dt, datetime) and dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -65,14 +65,14 @@ def post_comments(id):
         return (jsonify({"ok": False, "message": msg}), 400) if is_ajax else redirect(url_for("posts.post_detail", id=id))
 
     now = datetime.now(timezone.utc)
-    ins = mongo._db["comments"].insert_one({
+    ins = mongo.db["comments"].insert_one({
         "post_id": post_id,
         "user_id": user_id,
         "content": content,
         "created_at": now,
         "likes": [],
     })
-    user = mongo._db["users"].find_one({"_id": user_id})
+    user = mongo.db["users"].find_one({"_id": user_id})
 
     kst = ZoneInfo("Asia/Seoul")
     c = {
@@ -116,9 +116,9 @@ def comment_delete(comment_id):
         msg = "잘못된 요청입니다."
         return (jsonify({"ok": False, "message": msg}), 400) if is_ajax else redirect(url_for("posts.dashboard"))
 
-    comment = mongo._db["comments"].find_one({"_id": cid, "user_id": uid})
+    comment = mongo.db["comments"].find_one({"_id": cid, "user_id": uid})
     post_id = comment.get("post_id") if comment else None
-    res = mongo._db["comments"].delete_one({"_id": cid, "user_id": uid})
+    res = mongo.db["comments"].delete_one({"_id": cid, "user_id": uid})
     if not res.deleted_count:
         msg = "삭제할 수 없습니다."
         return (jsonify({"ok": False, "message": msg}), 400) if is_ajax else redirect(url_for("posts.dashboard"))
@@ -142,7 +142,7 @@ def comment_like(comment_id):
         msg = "잘못된 요청입니다."
         return (jsonify({"ok": False, "message": msg}), 400) if is_ajax else redirect(url_for("posts.dashboard"))
 
-    comment = mongo._db["comments"].find_one({"_id": cid})
+    comment = mongo.db["comments"].find_one({"_id": cid})
     if not comment:
         msg = "이미 삭제된 댓글입니다."
         return (jsonify({"ok": False, "message": msg}), 404) if is_ajax else redirect(url_for("posts.dashboard"))
@@ -151,13 +151,13 @@ def comment_like(comment_id):
     if isinstance(likes, int):
         likes = []
     if uid in likes:
-        mongo._db["comments"].update_one({"_id": cid}, {"$pull": {"likes": uid}})
+        mongo.db["comments"].update_one({"_id": cid}, {"$pull": {"likes": uid}})
         msg = "댓글 추천을 취소했습니다."
     else:
-        mongo._db["comments"].update_one({"_id": cid}, {"$push": {"likes": uid}})
+        mongo.db["comments"].update_one({"_id": cid}, {"$push": {"likes": uid}})
         msg = "댓글을 추천했습니다."
 
-    new_comment = mongo._db["comments"].find_one({"_id": cid})
+    new_comment = mongo.db["comments"].find_one({"_id": cid})
     like_count = len(new_comment.get("likes", [])) if new_comment else 0
 
     if is_ajax:
