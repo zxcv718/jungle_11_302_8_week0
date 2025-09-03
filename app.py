@@ -942,8 +942,5 @@ def api_session_status():
 if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "5050"))
-<<<<<<< HEAD
-    app.run(host=host, port=port, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
-=======
+    # app.run(host=host, port=port, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
     socketio.run(app, host=host, port=port, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
->>>>>>> 3914eea (feat: 채팅 기능 구현)
