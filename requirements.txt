@@ -7,3 +7,4 @@ beautifulsoup4==4.12.3
 Flask-SocketIO==5.3.6
 markdown2==2.4.13
 bleach==6.1.0
+Flask-Mail==0.9.1
