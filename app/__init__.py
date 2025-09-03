@@ -3,6 +3,7 @@ import os
 from .extensions.socketio import socketio
 from .extensions.jwt import jwt
 from .extensions.mongo import init_mongo
+from .extensions.mail import mail
 from .blueprints.auth import bp as auth_bp
 from .blueprints.home import bp as home_bp
 from .blueprints.posts import bp as posts_bp
@@ -23,6 +24,7 @@ def create_app(config_object: str = "config.Config") -> Flask:
     jwt.init_app(app)
     socketio.init_app(app, cors_allowed_origins=None, async_mode="threading", logger=False, engineio_logger=False)
     init_mongo(app)
+    mail.init_app(app)
 
     # Blueprints
     app.register_blueprint(home_bp)
