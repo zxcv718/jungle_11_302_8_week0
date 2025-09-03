@@ -1,199 +1,164 @@
 {% extends 'base.html' %}
 {% block content %}
 
-<!-- Post Carousel Section -->
-<section class="mt-4">
-  <div class="max-w-lg">
-    <h2 class="text-xl font-semibold mb-4">인기 글</h2>
-    <div id="carousel-container" class="relative bg-white rounded-lg border shadow-sm overflow-hidden">
-      <!-- Carousel slides -->
-      <div id="carousel-slides" class="flex transition-transform duration-500 ease-in-out">
-        <!-- Slides will be injected by JavaScript -->
+<div class="flex flex-row gap-8">
+  <div class="w-full {% if user_info %}md:w-2/3{% endif %}">
+    <!-- Post Carousel Section -->
+    <section class="mt-4">
+      <div class="max-w-lg">
+        <h2 class="text-xl font-semibold mb-4">인기 글</h2>
+        <div id="carousel-container" class="relative bg-white rounded-lg border shadow-sm overflow-hidden">
+          <!-- Carousel slides -->
+          <div id="carousel-slides" class="flex transition-transform duration-500 ease-in-out">
+            {% for post in popular_posts %}
+            <div class="w-full flex-shrink-0">
+              <a href="{{ url_for('post_detail', id=post.id) }}" class="block relative h-72 bg-gray-200 text-white">
+                {% if post.meta and post.meta.image %}
+                <img src="{{ post.meta.image }}" alt="{{ post.title }}" class="w-full h-full object-cover" />
+                {% endif %}
+                <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+                <div class="absolute bottom-0 left-0 right-0 p-4 pl-16 pb-24">
+                  <h3 class="font-bold truncate text-3xl">{{ post.title or '' }}</h3>
+                </div>
+              </a>
+            </div>
+            {% endfor %}
+          </div>
+
+          <!-- Prev/Next Buttons -->
+          <button id="carousel-prev" class="absolute top-1/2 left-2 transform -translate-y-1/2 bg-gray-800 bg-opacity-50 text-white rounded-full p-2 hover:bg-opacity-75 focus:outline-none">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+          </button>
+          <button id="carousel-next" class="absolute top-1/2 right-2 transform -translate-y-1/2 bg-gray-800 bg-opacity-50 text-white rounded-full p-2 hover:bg-opacity-75 focus:outline-none">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+          </button>
+
+          <!-- Indicators -->
+          <div id="carousel-indicators" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex space-x-2">
+            {% for post in popular_posts %}
+            <button data-index="{{ loop.index0 }}" class="w-3 h-3 rounded-full {% if loop.first %}bg-gray-800{% else %}bg-gray-300{% endif %}"></button>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mt-8">
+      <div class="max-w-4xl mx-auto">
+        <h1 class="text-2xl font-bold">전체 글 목록</h1>
       </div>
 
-      <!-- Prev/Next Buttons -->
-      <button id="carousel-prev" class="absolute top-1/2 left-2 transform -translate-y-1/2 bg-gray-800 bg-opacity-50 text-white rounded-full p-2 hover:bg-opacity-75 focus:outline-none">
-        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-      </button>
-      <button id="carousel-next" class="absolute top-1/2 right-2 transform -translate-y-1/2 bg-gray-800 bg-opacity-50 text-white rounded-full p-2 hover:bg-opacity-75 focus:outline-none">
-        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-      </button>
-
-      <!-- Indicators -->
-      <div id="carousel-indicators" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex space-x-2">
-        <!-- Indicators will be injected by JavaScript -->
+      <div class="mt-4 space-y-4 max-w-lg">
+        {% if posts %}
+          {% for post in posts %}
+            <a href="{{ url_for('post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
+              <div class="flex justify-between items-center text-sm text-gray-500 mb-1">
+                <span>{{ post.category or '' }} · {{ post.date_text or '' }}</span>
+                <span class="font-semibold text-emerald-600">추천 {{ post.like_count }}</span>
+              </div>
+              <div class="font-semibold text-gray-900 line-clamp-1">{{ post.title or '' }}</div>
+              <div class="text-gray-700 mt-1 line-clamp-2">{{ post.contents or '' }}</div>
+            </a>
+          {% endfor %}
+        {% else %}
+          <div class="mt-8 text-center text-gray-500">작성된 글이 없습니다.</div>
+        {% endif %}
       </div>
-    </div>
-  </div>
-</section>
-
-<section class="mt-8">
-  <div class="max-w-4xl mx-auto">
-    <h1 class="text-2xl font-bold">전체 글 목록</h1>
+    </section>
   </div>
 
-  <div class="mt-4 space-y-4 max-w-lg">
-    {% if posts %}
-      {% for post in posts %}
-        <a href="{{ url_for('post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
-          <div class="text-sm text-gray-500 mb-1">{{ post.category or '' }} · {{ post.date_text or '' }}</div>
-          <div class="font-semibold text-gray-900 line-clamp-1">{{ post.title or '' }}</div>
-          <div class="text-gray-700 mt-1 line-clamp-2">{{ post.contents or '' }}</div>
-        </a>
-      {% endfor %}
-    {% else %}
-      <div class="mt-8 text-center text-gray-500">작성된 글이 없습니다.</div>
-    {% endif %}
+  {% if user_info %}
+  <div class="hidden md:block md:w-1/3">
+    <aside class="sticky top-8">
+        <h2 class="text-xl font-semibold mb-4">구독한 글</h2>
+        <div class="space-y-4">
+            {% if subscribed_posts %}
+                {% for post in subscribed_posts %}
+                    <a href="{{ url_for('post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
+                      <div class="text-sm text-gray-500 mb-1">{{ post.date_text or '' }}</div>
+                      <div class="font-semibold text-gray-900 line-clamp-1">{{ post.title or '' }}</div>
+                    </a>
+                {% endfor %}
+            {% else %}
+                <div class="text-center text-gray-500">구독한 글이 없습니다.</div>
+            {% endif %}
+        </div>
+    </aside>
   </div>
-</section>
+  {% endif %}
+</div>
 
 <script>
-  // Carousel elements
-  const carouselSlides = document.getElementById('carousel-slides');
-  const carouselPrev = document.getElementById('carousel-prev');
-  const carouselNext = document.getElementById('carousel-next');
-  const carouselIndicators = document.getElementById('carousel-indicators');
+  document.addEventListener('DOMContentLoaded', () => {
+    const carouselContainer = document.getElementById('carousel-container');
+    if (!carouselContainer) return;
 
-
-  const loginUrl = "{{ url_for('login_get') }}";
-  const refreshUrl = "{{ url_for('refresh') }}";
-
-  let carouselInterval = null;
-
-  let carouselState = {
-    posts: [],
-    currentIndex: 0,
-  };
-
-
-
-  // --- Carousel Logic ---
-  function renderCarousel() {
-    const posts = carouselState.posts;
-    if (!posts || posts.length === 0) {
-        document.getElementById('carousel-container').style.display = 'none';
-        return;
-    }
-
-    carouselSlides.innerHTML = '';
-    carouselIndicators.innerHTML = '';
-
-    posts.forEach((post, index) => {
-      // 1. 슬라이드 구조를 생성합니다.
-      const slide = document.createElement('div');
-      slide.className = 'w-full flex-shrink-0';
-      
-      // a 태그에 relative를 주어 자식 요소의 absolute 포지셔닝 기준으로 만듭니다.
-      slide.innerHTML = `
-        <a href="/post/${post.id}" class="block relative h-72 bg-gray-200 text-white">
-          
-          <!-- 이미지가 채워질 배경 div -->
-          <div id="preview-${post.id}" class="w-full h-full"></div>
-          
-          <!-- 제목을 위한 오버레이 -->
-          <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
-          <div class="absolute bottom-0 left-0 right-0 pl-16 pr-16 pb-24">
-            <h3 class="font-semibold truncate text-4xl">${post.title || ''}</h3>
-          </div>
-        </a>
-      `;
-      carouselSlides.appendChild(slide);
-
-      // 2. URL이 있으면, 해당 URL로 미리보기 API를 호출합니다.
-      if (post.url) {
-        fetch(`{{ url_for('api_preview_url') }}?url=${encodeURIComponent(post.url)}`)
-          .then(res => res.ok ? res.json() : Promise.reject('API call failed'))
-          .then(meta => {
-            const previewContainer = document.getElementById(`preview-${post.id}`);
-            if (!previewContainer) return;
-
-            // 3. API 응답에 이미지가 있으면, 배경 div를 이미지로 채웁니다.
-            if (meta.ok && meta.image) {
-              previewContainer.innerHTML = `<img src="${meta.image}" alt="Post preview" class="w-full h-full object-cover" />`;
-            }
-            // 이미지가 없으면 회색 배경이 그대로 유지됩니다.
-          })
-          .catch(err => {
-            console.error('Preview fetch error:', err);
-            // 에러가 발생해도 회색 배경이 그대로 유지됩니다.
-          });
-      }
-
-      // 인디케이터 생성
-      const indicator = document.createElement('button');
-      indicator.className = 'w-3 h-3 rounded-full';
-      indicator.dataset.index = index;
-      indicator.classList.add(index === carouselState.currentIndex ? 'bg-gray-800' : 'bg-gray-300');
-      carouselIndicators.appendChild(indicator);
-    });
-    updateCarousel();
-  }
-
-
-  function updateCarousel() {
-    const slides = carouselSlides.querySelectorAll('.w-full');
-    if (slides.length === 0) return;
-    carouselSlides.style.transform = `translateX(-${carouselState.currentIndex * 100}%)`;
+    const carouselSlides = document.getElementById('carousel-slides');
+    const carouselPrev = document.getElementById('carousel-prev');
+    const carouselNext = document.getElementById('carousel-next');
+    const carouselIndicators = document.getElementById('carousel-indicators');
     
+    const slides = carouselSlides.querySelectorAll('.w-full.flex-shrink-0');
     const indicators = carouselIndicators.querySelectorAll('button');
-    indicators.forEach((indicator, index) => {
-      indicator.classList.toggle('bg-gray-800', index === carouselState.currentIndex);
-      indicator.classList.toggle('bg-gray-300', index !== carouselState.currentIndex);
-    });
-  }
-
-  // 자동 슬라이드 타이머를 리셋하는 함수
-  function resetCarouselInterval() {
-    clearInterval(carouselInterval); // 기존 타이머 제거
-    // 3초마다 다음 슬라이드로 이동하는 새 타이머 설정
-    carouselInterval = setInterval(() => {
-      if (carouselState.posts.length === 0) return; // 게시물이 없으면 중지
-      carouselState.currentIndex = (carouselState.currentIndex + 1) % carouselState.posts.length;
-      updateCarousel();
-    }, 3000);
-  }
-
-  carouselPrev.addEventListener('click', () => {
-    carouselState.currentIndex = (carouselState.currentIndex - 1 + carouselState.posts.length) % carouselState.posts.length;
-    updateCarousel();
-    resetCarouselInterval(); // 사용자가 직접 넘기면 타이머 리셋
-  });
-
-  carouselNext.addEventListener('click', () => {
-    carouselState.currentIndex = (carouselState.currentIndex + 1) % carouselState.posts.length;
-    updateCarousel();
-    resetCarouselInterval(); // 사용자가 직접 넘기면 타이머 리셋
-  });
-
-  carouselIndicators.addEventListener('click', (e) => {
-    if (e.target.tagName === 'BUTTON') {
-      carouselState.currentIndex = parseInt(e.target.dataset.index, 10);
-      updateCarousel();
-      resetCarouselInterval(); // 사용자가 직접 넘기면 타이머 리셋
+    const numSlides = slides.length;
+    
+    if (numSlides === 0) {
+      carouselContainer.style.display = 'none';
+      return;
     }
-  });
 
-  async function fetchCarouselPosts() {
-    const params = new URLSearchParams({ page: 1, limit: 5 }); // Fetch 5 latest posts for carousel
-    try {
-      const res = await fetch(`{{ url_for('api_posts') }}?` + params.toString());
-      if (!res.ok) return;
-      const data = await res.json();
-      carouselState.posts = data.items || [];
-      renderCarousel();
-      
-      // 게시물이 2개 이상일 때만 자동 슬라이드 시작
-      if (carouselState.posts.length > 1) {
+    let currentIndex = 0;
+    let carouselInterval = null;
+
+    function updateCarousel() {
+      carouselSlides.style.transform = `translateX(-${currentIndex * 100}%)`;
+      indicators.forEach((indicator, index) => {
+        indicator.classList.toggle('bg-gray-800', index === currentIndex);
+        indicator.classList.toggle('bg-gray-300', index !== currentIndex);
+      });
+    }
+
+    function resetCarouselInterval() {
+      clearInterval(carouselInterval);
+      if (numSlides > 1) {
+        carouselInterval = setInterval(() => {
+          currentIndex = (currentIndex + 1) % numSlides;
+          updateCarousel();
+        }, 3000);
+      }
+    }
+
+    carouselPrev.addEventListener('click', () => {
+      if (numSlides === 0) return;
+      currentIndex = (currentIndex - 1 + numSlides) % numSlides;
+      updateCarousel();
+      resetCarouselInterval();
+    });
+
+    carouselNext.addEventListener('click', () => {
+      if (numSlides === 0) return;
+      currentIndex = (currentIndex + 1) % numSlides;
+      updateCarousel();
+      resetCarouselInterval();
+    });
+
+    carouselIndicators.addEventListener('click', (e) => {
+      if (e.target.tagName === 'BUTTON') {
+        currentIndex = parseInt(e.target.dataset.index, 10);
+        updateCarousel();
         resetCarouselInterval();
       }
-    } catch (err) {
-      console.error('Failed to fetch carousel posts:', err);
-    }
-  }
+    });
 
+    // Initial setup
+    updateCarousel();
+    resetCarouselInterval();
+  });
 
-
+  // This utility function might be used elsewhere, so it's safer to keep it.
   async function fetchWithAutoRefresh(url, options={}) {
+    const loginUrl = "{{ url_for('login_get') }}";
+    const refreshUrl = "{{ url_for('refresh') }}";
     const res = await fetch(url, { credentials: 'same-origin', ...options });
     if (res.status !== 401) return res;
     let err;
@@ -218,11 +183,5 @@
     }
     return res;
   }
-
-  // --- Initial Load ---
-  document.addEventListener('DOMContentLoaded', async () => {
-    // 1. 캐러셀 게시물을 먼저 가져옵니다.
-    await fetchCarouselPosts();
-  });
 </script>
 {% endblock %}
