@@ -48,6 +48,8 @@ if _db is None:
 users = _db["users"]
 posts = _db["posts"]
 comments = _db["comments"]
+chat_rooms = _db["chat_rooms"]
+chat_messages = _db["chat_messages"]
 try:
     users.create_index("email", unique=True)
     posts.create_index([("user_id", 1), ("created_at", -1)])
@@ -55,8 +57,6 @@ try:
 except Exception as e:
     # Avoid crashing on startup if DB requires auth. Handlers will still fail until MONGO_URI is correct.
     print("[warn] Could not ensure indexes:", e)
-    chat_rooms = _db["chat_rooms"]
-chat_messages = _db["chat_messages"]
 if os.getenv("SKIP_INDEX", "0") != "1":
     try:
         users.create_index("email", unique=True)
