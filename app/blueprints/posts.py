@@ -96,7 +96,7 @@ def post_new_post():
         return redirect(url_for("post_new_get"))
     # Store created_at to comply with Atlas validator; avoid extra fields
     now_utc = datetime.now(timezone.utc)
-    mongo._db.posts.insert_one({
+    result = mongo._db.posts.insert_one({
         "user_id": user_id,
         "category": category,
         "title": title,
@@ -104,7 +104,22 @@ def post_new_post():
         "contents": contents,
         "created_at": now_utc,
         "likes": [],
+        "views": 0,
     })
+    # --- post_views 컬렉션에 글 작성일 기준 첫 조회수 1건 생성 ---
+    try:
+        post_id = result.inserted_id
+        # user_id는 이미 ObjectId
+        mongo._db.post_views.update_one(
+            {"post_id": post_id, "user_id": user_id, "date": now_utc.strftime("%Y-%m-%d")},
+            {"$inc": {"count": 1}},
+            upsert=True
+        )
+        # 실제로 들어갔는지 확인
+        pv = mongo._db.post_views.find_one({"post_id": post_id, "user_id": user_id, "date": now_utc.strftime("%Y-%m-%d")})
+        print(f"[post_views insert on post_new] {pv}")
+    except Exception as e:
+        print(f"[post_views upsert error on post_new] {e}")
     flash("글이 등록되었습니다.", "success")
     return redirect(url_for("posts.dashboard"))
 
@@ -119,6 +134,22 @@ def post_detail(id):
         abort(404)
 
     doc = mongo._db.posts.find_one({"_id": oid})
+    mongo._db.posts.update_one({"_id": oid}, {"$inc": {"views": 1}})
+    # --- post_views 컬렉션에 일별 조회수 upsert ---
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if doc:
+        user_id = doc["user_id"]
+        try:
+            if not isinstance(user_id, ObjectId):
+                user_id = ObjectId(user_id)
+            mongo._db.post_views.insert_one(
+                {"user_id": user_id, "date": today},
+                {"$inc": {"count": 1}},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"[post_views upsert error on post_detail] {e}")
+    
     if not doc:
         flash("요청한 글을 찾을 수 없습니다.", "error")
         return redirect(url_for("home.root"))
@@ -198,6 +229,7 @@ def post_detail(id):
             "date_text": date_text,
             "url": url,
             "like_count": len(doc.get("likes", [])),
+            "views" : doc.get("views", 0),
             "author": {
                 "id": str(author["_id"]),
                 "name": author.get("name", "알 수 없음")

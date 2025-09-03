@@ -69,7 +69,10 @@
           })();
         </script>
       {% endif %}
-    <div class="text-xs text-gray-500 mt-1">{{ post.date_text }}</div>
+    <div class="flex items-center gap-2 mt-1">
+      <div class="text-xs text-gray-500">{{ post.date_text }}</div>
+      <div class="text-xs text-gray-500 ml-2">조회수: {{ post.views }}</div>
+    </div>
   </div>
 
   <div class="flex items-center gap-4 mt-4">
