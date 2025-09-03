@@ -116,7 +116,8 @@ def root():
             "user_id": 1, "category": 1, "title": 1, "url": 1, "contents": 1, "created_at": 1, "meta": 1,
             "like_count": {"$size": {"$ifNull": ["$likes", []]}}
         }},
-        {"$sort": {"like_count": -1, "created_at": -1}}
+        {"$sort": {"like_count": -1, "created_at": -1}},
+        {"$limit": 5} # 전체 글 목록을 10개로 제한
     ]
     all_posts = [process_post_doc(doc) for doc in posts.aggregate(pipeline_all)]
 
