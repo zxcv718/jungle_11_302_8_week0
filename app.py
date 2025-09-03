@@ -444,7 +444,7 @@ def post_edit_post(id):
 
 
 @app.get("/api/preview-url")
-@jwt_required()
+#@jwt_required()
 def api_preview_url():
     """Validate URL using metadata module (requests+bs4) for permissive preview.
     Returns JSON: {ok, title, description, image, url, content_type}.
