@@ -2,7 +2,7 @@
 {% block content %}
 <div class="flex items-center justify-between mb-4">
   <h1 class="text-2xl font-bold">{{ category }} 채팅</h1>
-  <a href="{{ url_for('chat_home') }}" class="text-sm text-blue-700">← 카테고리로</a>
+  <a href="{{ url_for('chat.chat_home') }}" class="text-sm text-blue-700">← 카테고리로</a>
 </div>
 
 <div class="grid md:grid-cols-3 gap-6">
@@ -24,7 +24,7 @@
 <script id="chatCatScript" data-cat="{{ category }}">
   const catName = document.currentScript.getAttribute('data-cat');
   async function loadRooms() {
-    const res = await fetch(`{{ url_for('api_list_rooms', category='__CAT__') }}`.replace('__CAT__', encodeURIComponent(catName)), { credentials: 'same-origin' });
+  const res = await fetch(`{{ url_for('chat.api_list_rooms', category='__CAT__') }}`.replace('__CAT__', encodeURIComponent(catName)), { credentials: 'same-origin' });
     if (!res.ok) return;
     const data = await res.json();
     const list = document.getElementById('roomList');
@@ -32,7 +32,7 @@
     list.innerHTML = '';
     (data.rooms || []).forEach(r => {
       const a = document.createElement('a');
-      a.href = `{{ url_for('chat_room', category='__CAT__', room_id='__RID__') }}`
+  a.href = `{{ url_for('chat.chat_room', category='__CAT__', room_id='__RID__') }}`
         .replace('__CAT__', encodeURIComponent(catName))
         .replace('__RID__', r.id);
       a.className = 'block p-3 bg-white rounded border hover:bg-gray-50';
@@ -46,12 +46,12 @@
   document.getElementById('createForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
-  const res = await fetch(`{{ url_for('api_create_room', category='__CAT__') }}`.replace('__CAT__', encodeURIComponent(catName)), {
+  const res = await fetch(`{{ url_for('chat.api_create_room', category='__CAT__') }}`.replace('__CAT__', encodeURIComponent(catName)), {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: fd.get('name') })
     });
     if (!res.ok) { alert('생성 실패'); return; }
     const j = await res.json();
-    window.location.href = `{{ url_for('chat_room', category='__CAT__', room_id='__RID__') }}`
+  window.location.href = `{{ url_for('chat.chat_room', category='__CAT__', room_id='__RID__') }}`
       .replace('__CAT__', encodeURIComponent(catName)).
       replace('__RID__', j.id);
   });

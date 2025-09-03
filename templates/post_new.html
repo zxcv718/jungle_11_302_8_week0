@@ -1,7 +1,10 @@
 {% extends 'base.html' %}
 {% block content %}
 <h1 class="text-xl font-semibold mb-4">새 글 작성</h1>
-<form id="postForm" action="{{ url_for('post_new_post') }}" method="post" class="space-y-4">
+<!-- Toast UI Editor CDN -->
+<link rel="stylesheet" href="https://uicdn.toast.com/editor/latest/toastui-editor.min.css">
+<script src="https://uicdn.toast.com/editor/latest/toastui-editor-all.min.js"></script>
+<form id="postForm" action="{{ url_for('posts.post_new_post') }}" method="post" class="space-y-4">
   <div>
     <label class="block text-sm">카테고리</label>
     <select id="category" name="category" required class="w-full border rounded px-3 py-2">
@@ -24,10 +27,12 @@
   </div>
   <div>
     <label class="block text-sm">내용</label>
-    <textarea id="contents" name="contents" rows="6" required class="w-full border rounded px-3 py-2"></textarea>
+  <!-- Hidden textarea to submit Markdown; replaced visually by Toast UI Editor -->
+  <textarea id="contents" name="contents" rows="6" required class="hidden"></textarea>
+  <div id="editor" class="border rounded bg-white"></div>
   </div>
   <div class="flex gap-2">
-    <a href="{{ url_for('dashboard') }}" class="flex-1 bg-gray-200 text-gray-800 py-2 rounded text-center">취소</a>
+  <a href="{{ url_for('posts.dashboard') }}" class="flex-1 bg-gray-200 text-gray-800 py-2 rounded text-center">취소</a>
     <button id="submitBtn" class="flex-1 bg-emerald-600 text-white py-2 rounded opacity-50 cursor-not-allowed" disabled>등록</button>
   </div>
 </form>
@@ -40,12 +45,48 @@
   const submitBtn = document.getElementById('submitBtn');
   const urlStatus = document.getElementById('urlStatus');
 
+  // Initialize Toast UI Editor
+  let editor;
+  try {
+    editor = new toastui.Editor({
+      el: document.querySelector('#editor'),
+      height: '400px',
+      initialEditType: 'wysiwyg',
+      previewStyle: 'vertical',
+      usageStatistics: false,
+      initialValue: ''
+    });
+    // Image upload hook -> backend API
+    editor.addHook('addImageBlobHook', async (blob, callback) => {
+      try {
+        const fd = new FormData();
+        fd.append('image', blob, blob.name || 'image');
+  const res = await fetch("{{ url_for('posts.api_upload_image') }}", { method: 'POST', body: fd, credentials: 'same-origin' });
+        const j = await res.json();
+        if (res.ok && j.ok && j.url) {
+          callback(j.url, blob.name || 'image');
+        } else {
+          alert(j.error || '이미지 업로드 실패');
+        }
+      } catch (e) {
+        alert('이미지 업로드 중 오류');
+      }
+    });
+    // Hidden textarea must not block native validation
+    contentsEl.removeAttribute('required');
+    // Keep textarea value in sync so server always gets latest markdown
+    editor.on('change', () => {
+      contentsEl.value = editor.getMarkdown();
+    });
+  } catch (e) { /* CDN load fail -> fallback to textarea */ }
+
   let urlOk = false;
   function setSubmitState() {
+    const body = editor ? editor.getMarkdown().trim() : contentsEl.value.trim();
     const allOk = (
       cat.value && cat.value !== '선택' &&
       titleEl.value.trim().length > 0 &&
-      contentsEl.value.trim().length > 0 &&
+      body.length > 0 &&
       urlOk
     );
     submitBtn.disabled = !allOk;
@@ -74,24 +115,26 @@
       setSubmitState();
       return;
     }
-    urlStatus.textContent = '확인 중...';
+    // Allow submit based on syntax; preview is best-effort
+    urlOk = true;
+    urlStatus.textContent = '미리보기 확인 중...';
     urlStatus.className = 'absolute right-2 top-2 text-xs text-gray-600';
     try {
-      const res = await fetchWithAutoRefresh(`{{ url_for('api_preview_url') }}?url=${encodeURIComponent(v)}`, { credentials: 'same-origin' });
+  const res = await fetchWithAutoRefresh(`{{ url_for('posts.api_preview_url') }}?url=${encodeURIComponent(v)}`, { credentials: 'same-origin' });
       const data = await res.json();
       if (res.ok && data && data.ok) {
-        urlOk = true;
         urlStatus.innerHTML = '<span class="text-green-600">등록 가능</span>';
         urlStatus.className = 'absolute right-2 top-2 text-xs';
       } else {
-        urlOk = false;
-        urlStatus.textContent = '유효하지 않은 URL';
-        urlStatus.className = 'absolute right-2 top-2 text-xs text-red-600';
+        // Keep urlOk true (syntax valid); just show warning
+        urlStatus.textContent = '미리보기 불가 (저장은 가능)';
+        urlStatus.className = 'absolute right-2 top-2 text-xs text-amber-600';
       }
     } catch (e) {
-      urlOk = false;
-      urlStatus.textContent = '유효하지 않은 URL';
-      urlStatus.className = 'absolute right-2 top-2 text-xs text-red-600';
+      // Network/preview error: don't block submit if syntax is OK
+      urlOk = isLikelyUrl(v);
+      urlStatus.textContent = '미리보기 실패 (저장은 가능)';
+      urlStatus.className = 'absolute right-2 top-2 text-xs text-amber-600';
     }
     setSubmitState();
   }
@@ -99,7 +142,7 @@
   async function fetchWithAutoRefresh(input, init={}) {
     let res = await fetch(input, { ...init, credentials: 'same-origin' });
     if (res.status === 401) {
-      const r = await fetch(`{{ url_for('refresh') }}`, { method: 'POST', credentials: 'same-origin' });
+  const r = await fetch(`{{ url_for('auth.refresh') }}`, { method: 'POST', credentials: 'same-origin' });
       if (r.ok) {
         res = await fetch(input, { ...init, credentials: 'same-origin' });
       } else {
@@ -107,7 +150,7 @@
           const j = await r.json();
           if (j && j.error === 'unauthorized') {
             alert('세션이 만료되었습니다. 다시 로그인해주세요.');
-            window.location.href = `{{ url_for('login_get') }}`;
+            window.location.href = `{{ url_for('auth.login_get') }}`;
           }
         } catch {}
         throw new Error('unauthorized');
@@ -125,13 +168,22 @@
   });
   cat.addEventListener('change', setSubmitState);
   titleEl.addEventListener('input', setSubmitState);
-  contentsEl.addEventListener('input', setSubmitState);
+  if (editor) {
+    editor.on('change', setSubmitState);
+  } else {
+    contentsEl.addEventListener('input', setSubmitState);
+  }
 
   // prevent submit if invalid (e.g., Enter key)
   form.addEventListener('submit', (e) => {
     if (submitBtn.disabled) {
       e.preventDefault();
       setSubmitState();
+      return;
+    }
+    // Sync markdown to hidden textarea before submit
+    if (editor) {
+      contentsEl.value = editor.getMarkdown();
     }
   });
 

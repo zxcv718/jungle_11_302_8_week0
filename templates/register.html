@@ -2,7 +2,7 @@
 {% block content %}
 <div class="max-w-xl mx-auto">
 <h1 class="text-xl font-semibold mb-4">회원가입</h1>
-<form id="registerForm" action="{{ url_for('register_post') }}" method="post" class="space-y-4">
+<form id="registerForm" action="{{ url_for('auth.register_post') }}" method="post" class="space-y-4">
   <div>
     <label class="block text-sm">이름</label>
     <input id="name" type="text" name="name" required class="w-full border rounded px-3 py-2" />
@@ -27,7 +27,7 @@
   </div>
   <button id="submitBtn" type="submit" class="w-full bg-emerald-600 text-white py-2 rounded opacity-50 cursor-not-allowed" disabled>회원가입</button>
 </form>
-<p class="mt-4 text-sm">이미 계정이 있나요? <a href="{{ url_for('login_get') }}" class="text-blue-600">로그인</a></p>
+<p class="mt-4 text-sm">이미 계정이 있나요? <a href="{{ url_for('auth.login_get') }}" class="text-blue-600">로그인</a></p>
 
 </div>
 
@@ -52,7 +52,7 @@
     }
     emailStatus.textContent = '확인 중...';
     try {
-      const res = await fetch(`{{ url_for('api_check_email') }}?email=${encodeURIComponent(value)}`);
+  const res = await fetch(`{{ url_for('auth.api_check_email') }}?email=${encodeURIComponent(value)}`);
       const data = await res.json();
       if (data.exists) {
         emailStatus.textContent = '이미 사용 중';

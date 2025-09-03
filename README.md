@@ -10,7 +10,7 @@ Requirements:
 
 1. Create and fill `.env` (copy from `.env.example`).
 2. Install Python packages.
-3. Run the app and open http://127.0.0.1:5000
+3. Run the app and open http://127.0.0.1:5050
 
 ### Quickstart
 
@@ -20,6 +20,19 @@ cp .env.example .env
 ```
 
 Then run with Python 3.9+.
+
+Run
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py
+```
+
+Notes
+- App runs via `main.py` which loads `.env` automatically and uses the application factory in `app/`.
+- Default port is 5050. Set HOST/PORT in `.env` if needed.
 
 ## Notes
 - Access token expires in 15 minutes, Refresh token in 30 minutes.

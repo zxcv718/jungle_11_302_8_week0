@@ -39,7 +39,36 @@
   </div>
   <div>
     <label class="block text-sm text-gray-500">내용</label>
-    <div class="w-full border rounded px-3 py-2 bg-gray-100 whitespace-pre-wrap">{{ post.contents }}</div>
+      {% if post.contents_html %}
+        <div class="w-full border rounded bg-white px-3 py-2 prose max-w-none">{{ post.contents_html|safe }}</div>
+      {% else %}
+        <!-- Toast UI Viewer for Markdown rendering (fallback when SSR not available) -->
+        <link rel="stylesheet" href="https://uicdn.toast.com/editor/latest/toastui-editor.min.css">
+        <script src="https://uicdn.toast.com/editor/latest/toastui-editor-all.min.js"></script>
+        <textarea id="md-src" class="hidden">{{ post.contents }}</textarea>
+        <div id="viewer" class="w-full border rounded bg-white"></div>
+        <script>
+          (function(){
+            try {
+              const src = document.getElementById('md-src');
+              const md = src ? src.value : '';
+              new toastui.Editor.factory({
+                el: document.querySelector('#viewer'),
+                viewer: true,
+                usageStatistics: false,
+                initialValue: md || ''
+              });
+            } catch(e) {
+              // Fallback to plain text if CDN failed
+              const v = document.getElementById('viewer');
+              if (v) {
+                v.className += ' px-3 py-2 whitespace-pre-wrap';
+                v.textContent = (document.getElementById('md-src')?.value) || '';
+              }
+            }
+          })();
+        </script>
+      {% endif %}
     <div class="text-xs text-gray-500 mt-1">{{ post.date_text }}</div>
   </div>
 
@@ -100,7 +129,7 @@
     <h2 class="text-lg font-semibold mb-3">댓글</h2>
     <!-- 댓글 작성 폼 (로그인 사용자만) -->
     {% if current_user %}
-    <form id="commentForm" action="{{ url_for('post_comments', id=post.id) }}" method="post" class="flex gap-2 mb-4">
+  <form id="commentForm" action="{{ url_for('comments.post_comments', id=post.id) }}" method="post" class="flex gap-2 mb-4">
       <input type="text" name="content" required maxlength="200" placeholder="댓글을 입력하세요" class="flex-1 border rounded px-3 py-2" />
       <button type="submit" class="bg-emerald-600 text-white px-4 py-2 rounded">등록</button>
     </form>
@@ -123,7 +152,7 @@
           <span class="ml-1 text-xs text-gray-700" id="like-count-{{ c.id }}">{{ c.like_count or 0 }}</span>
         </div>
         {% if current_user and c.user_id == current_user.id %}
-        <form action="{{ url_for('comment_delete', comment_id=c.id) }}" method="post">
+  <form action="{{ url_for('comments.comment_delete', comment_id=c.id) }}" method="post">
           <button class="text-red-600 text-xs px-2 py-1 rounded">삭제</button>
         </form>
         {% endif %}

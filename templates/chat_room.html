@@ -5,7 +5,7 @@
     <div class="text-sm text-gray-500">{{ category }}</div>
     <h1 class="text-2xl font-bold">{{ room.name }}</h1>
   </div>
-  <a href="{{ url_for('chat_category', category=category) }}" class="text-sm text-blue-700">← 방 목록</a>
+  <a href="{{ url_for('chat.chat_category', category=category) }}" class="text-sm text-blue-700">← 방 목록</a>
 </div>
 
 <div class="mb-2 text-sm text-gray-600">현재 인원: <span id="peerCount">-</span>명</div>
@@ -19,7 +19,7 @@
  </form>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
-<script id="roomScript" data-room-id="{{ room.id }}" data-me-name="{{ me_name }}" data-me-id="{{ me_id }}" data-back="{{ url_for('chat_category', category=category) }}">
+<script id="roomScript" data-room-id="{{ room.id }}" data-me-name="{{ me_name }}" data-me-id="{{ me_id }}" data-back="{{ url_for('chat.chat_category', category=category) }}">
   if (window.__chatInit) { console.log('[chat] duplicate init ignored'); } else { window.__chatInit = true; }
   console.log('[chat] room script init');
   window.addEventListener('error', (e) => { try { console.error('[chat] script error', e.message || e.error); } catch {} });
@@ -56,7 +56,7 @@
   }
 
   async function loadHistory() {
-    const res = await fetch(`{{ url_for('api_room_messages', category=category, room_id=room.id) }}`, { credentials: 'same-origin' });
+  const res = await fetch(`{{ url_for('chat.api_room_messages', category=category, room_id=room.id) }}`, { credentials: 'same-origin' });
     if (!res.ok) return;
     const j = await res.json();
     (j.messages||[]).forEach(appendMsg);
@@ -64,18 +64,18 @@
   loadHistory();
 
   // Always fetch initial peers once on load (not tied to websocket)
-  fetch(`{{ url_for('api_room_peers', category=category, room_id=room.id) }}`, { credentials: 'same-origin' })
+  fetch(`{{ url_for('chat.api_room_peers', category=category, room_id=room.id) }}`, { credentials: 'same-origin' })
     .then(r => r.ok ? r.json() : { peers: 0 })
     .then(j => { peerEl.textContent = (j.peers ?? 0); })
     .catch(() => { peerEl.textContent = '0'; });
 
   async function ensureAccess() {
     try {
-      const s = await fetch(`{{ url_for('api_session_status') }}`, { credentials: 'same-origin' });
+  const s = await fetch(`{{ url_for('auth.api_session_status') }}`, { credentials: 'same-origin' });
       if (!s.ok) return;
       const j = await s.json();
       if (!j.authenticated || (j.type && j.type !== 'access')) {
-        await fetch(`{{ url_for('refresh') }}`, { method: 'POST', credentials: 'same-origin' });
+  await fetch(`{{ url_for('auth.refresh') }}`, { method: 'POST', credentials: 'same-origin' });
       }
     } catch {}
   }
@@ -95,7 +95,7 @@
       } else {
         console.log('[chat] http fallback send');
         const cid = genCid();
-        const r = await fetch(`{{ url_for('api_send_message', category=category, room_id=room.id) }}`, {
+  const r = await fetch(`{{ url_for('chat.api_send_message', category=category, room_id=room.id) }}`, {
           method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text })
         });
         if (r.ok) {

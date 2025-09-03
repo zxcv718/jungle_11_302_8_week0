@@ -1,0 +1,398 @@
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt, verify_jwt_in_request
+from bson import ObjectId
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import re
+
+from ..extensions import mongo
+from ..services.markdown_service import render_markdown_sanitized
+from ..utils.text import to_plain_preview, first_image_from_markdown
+from flask import current_app
+from werkzeug.utils import secure_filename
+from uuid import uuid4
+from urllib.parse import urlparse
+import os
+
+bp = Blueprint("posts", __name__)
+
+
+def get_categories():
+    return [
+        "프로그래밍언어","자료구조","알고리즘","컴퓨터구조","운영체제",
+        "시스템프로그래밍","데이터베이스","AI","보안","네트워크","기타"
+    ]
+
+
+@bp.get("/dashboard")
+@jwt_required()
+def dashboard():
+    identity = get_jwt_identity()
+    jwt_data = get_jwt()
+    email = jwt_data.get("email")
+    name = jwt_data.get("name")
+    user_id = ObjectId(identity)
+    sort_spec = [("created_at", -1), ("_id", -1)]
+    cur = mongo._db["posts"].find({"user_id": user_id}).sort(sort_spec).limit(10)
+    items = []
+    kst = ZoneInfo("Asia/Seoul")
+    for doc in cur:
+        date_text = None
+        dt = doc.get("created_at")
+        if isinstance(dt, datetime):
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            date_text = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+        contents = doc.get("contents", "")
+        first_img = first_image_from_markdown(contents)
+        text = to_plain_preview(contents)
+        items.append({
+            "id": str(doc.get("_id")),
+            "category": doc.get("category"),
+            "title": doc.get("title", ""),
+            "contents_text": text,
+            "first_image": first_img,
+            "date_text": date_text,
+        })
+    return render_template(
+        "dashboard.html",
+        title="대시보드",
+        name=name,
+        email=email,
+        identity=identity,
+        hide_top_nav=True,
+        initial_items=items,
+    )
+
+
+@bp.get("/post/new")
+@jwt_required()
+def post_new_get():
+    categories = ["전체", *get_categories()]
+    return render_template("post_new.html", title="새 글 작성", categories=[c for c in categories if c != "전체"], hide_top_nav=True)
+
+
+@bp.post("/post/new")
+@jwt_required()
+def post_new_post():
+    user_id = ObjectId(get_jwt_identity())
+    category = request.form.get("category", "")
+    title = request.form.get("title", "").strip()
+    url = request.form.get("url", "").strip()
+    contents = request.form.get("contents", "").strip()
+    if not title or not contents or not category or category == "선택":
+        flash("카테고리, 제목, 내용을 입력하세요.", "error")
+        return redirect(url_for("posts.post_new_get"))
+    try:
+        pu = urlparse(url)
+        if pu.scheme not in ("http", "https") or not pu.netloc:
+            raise ValueError("invalid url")
+    except Exception:
+        flash("유효한 URL을 입력하세요.", "error")
+        return redirect(url_for("posts.post_new_get"))
+    now_utc = datetime.now(timezone.utc)
+    mongo._db["posts"].insert_one({
+        "user_id": user_id,
+        "category": category,
+        "title": title,
+        "url": url,
+        "contents": contents,
+        "created_at": now_utc,
+    })
+    flash("글이 등록되었습니다.", "success")
+    return redirect(url_for("posts.dashboard"))
+
+
+@bp.get("/post/<id>")
+@jwt_required()
+def post_detail(id):
+    try:
+        oid = ObjectId(id)
+    except Exception:
+        return redirect(url_for("posts.dashboard"))
+    uid_str = get_jwt_identity()
+    try:
+        uid = ObjectId(uid_str)
+    except Exception:
+        flash("권한이 없습니다.", "error")
+        return redirect(url_for("posts.dashboard"))
+    doc = mongo._db["posts"].find_one({"_id": oid, "user_id": uid})
+    if not doc:
+        flash("요청한 글을 찾을 수 없습니다.", "error")
+        return redirect(url_for("posts.dashboard"))
+    kst = ZoneInfo("Asia/Seoul")
+    date_text = None
+    dt = doc.get("created_at")
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        date_text = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+    url = doc.get("url") or ""
+    # 메타데이터는 기존 metadata 모듈 재사용
+    from metadata import fetch_and_extract_metadata
+    meta = fetch_and_extract_metadata(url) if url else None
+    # 로그인 사용자 정보
+    try:
+        verify_jwt_in_request(optional=True)
+        jwt_data = get_jwt()
+        current_user = {"id": str(get_jwt_identity()), "name": jwt_data.get("name"), "email": jwt_data.get("email")}
+    except Exception:
+        current_user = None
+    # 댓글 목록
+    comment_cur = mongo._db["comments"].find({"post_id": oid}).sort("created_at", -1)
+    comment_list = []
+    for c in comment_cur:
+        user = mongo._db["users"].find_one({"_id": c["user_id"]})
+        dt = c["created_at"]
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        created_at_kst = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+        comment_list.append({
+            "id": str(c["_id"]),
+            "user_id": str(c["user_id"]),
+            "user_name": user["name"] if user else "알 수 없음",
+            "content": c["content"],
+            "created_at": created_at_kst,
+            "like_count": len(c.get("likes", [])),
+        })
+    best_comments = [c for c in comment_list if c["like_count"] > 0]
+    best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+    html_sanitized = render_markdown_sanitized(doc.get("contents", ""))
+    return render_template("post_detail.html", title="글 상세", post={
+        "id": str(doc.get("_id")),
+        "category": doc.get("category"),
+        "title": doc.get("title", ""),
+        "contents": doc.get("contents", ""),
+        "contents_html": html_sanitized,
+        "date_text": date_text,
+        "url": url,
+    }, meta=meta, hide_top_nav=True, current_user=current_user, comments=comment_list, best_comments=best_comments)
+
+
+@bp.get("/post/<id>/edit")
+@jwt_required()
+def post_edit_get(id):
+    try:
+        oid = ObjectId(id)
+    except Exception:
+        return redirect(url_for("posts.dashboard"))
+    uid = ObjectId(get_jwt_identity())
+    doc = mongo._db["posts"].find_one({"_id": oid, "user_id": uid})
+    if not doc:
+        flash("요청한 글을 찾을 수 없습니다.", "error")
+        return redirect(url_for("posts.dashboard"))
+    categories = get_categories()
+    post_obj = {
+        "id": str(doc.get("_id")),
+        "category": doc.get("category"),
+        "title": doc.get("title", ""),
+        "url": doc.get("url", ""),
+        "contents": doc.get("contents", ""),
+    }
+    return render_template("post_edit.html", title="글 수정", categories=categories, post=post_obj, hide_top_nav=True)
+
+
+@bp.post("/post/<id>/edit")
+@jwt_required()
+def post_edit_post(id):
+    try:
+        oid = ObjectId(id)
+    except Exception:
+        return redirect(url_for("posts.dashboard"))
+    uid = ObjectId(get_jwt_identity())
+    doc = mongo._db["posts"].find_one({"_id": oid, "user_id": uid})
+    if not doc:
+        return redirect(url_for("posts.dashboard"))
+    category = request.form.get("category", "")
+    title = request.form.get("title", "").strip()
+    url = request.form.get("url", "").strip()
+    contents = request.form.get("contents", "").strip()
+    if not title or not contents or not category or category == "선택":
+        flash("카테고리, 제목, 내용을 입력하세요.", "error")
+        return redirect(url_for("posts.post_edit_get", id=id))
+    try:
+        pu = urlparse(url)
+        if pu.scheme not in ("http", "https") or not pu.netloc:
+            raise ValueError("invalid url")
+    except Exception:
+        flash("유효한 URL을 입력하세요.", "error")
+        return redirect(url_for("posts.post_edit_get", id=id))
+    mongo._db["posts"].update_one({"_id": oid, "user_id": uid},{"$set": {
+        "category": category,
+        "title": title,
+        "url": url,
+        "contents": contents,
+    }, "$unset": {"date": "", "date_kst": "", "updated_at": "", "tag": ""}})
+    flash("수정되었습니다.", "success")
+    return redirect(url_for("posts.post_detail", id=id))
+
+
+@bp.post("/post/<id>/delete")
+@jwt_required()
+def post_delete(id):
+    try:
+        oid = ObjectId(id)
+    except Exception:
+        return redirect(url_for("posts.dashboard"))
+    uid = ObjectId(get_jwt_identity())
+    res = mongo._db["posts"].delete_one({"_id": oid, "user_id": uid})
+    if res.deleted_count:
+        flash("삭제되었습니다.", "success")
+    else:
+        flash("삭제할 수 없습니다.", "error")
+    return redirect(url_for("posts.dashboard"))
+
+
+@bp.get("/api/my-posts")
+@jwt_required()
+def api_my_posts():
+    category = request.args.get("category", "전체")
+    q = request.args.get("q", "").strip()
+    sort = request.args.get("sort", "new")
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    try:
+        limit = min(50, max(1, int(request.args.get("limit", 10))))
+    except ValueError:
+        limit = 10
+
+    user_id = ObjectId(get_jwt_identity())
+    filt = {"user_id": user_id}
+    if category and category != "전체":
+        filt["category"] = category
+    if q:
+        rx = {"$regex": q, "$options": "i"}
+        filt["$or"] = [{"title": rx}, {"contents": rx}]
+
+    sort_spec = [("created_at", -1 if sort == "new" else 1), ("_id", -1 if sort == "new" else 1)]
+    skip = (page - 1) * limit
+    cur = mongo._db["posts"].find(filt).sort(sort_spec).skip(skip).limit(limit)
+    items = []
+    kst = ZoneInfo("Asia/Seoul")
+    for doc in cur:
+        date_iso = None
+        date_text = None
+        dt = doc.get("created_at")
+        if isinstance(dt, datetime):
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            kst_dt = dt.astimezone(kst)
+            date_iso = kst_dt.isoformat()
+            date_text = kst_dt.strftime("%Y-%m-%d %H:%M")
+        items.append({
+            "id": str(doc.get("_id")),
+            "category": doc.get("category"),
+            "title": doc.get("title", ""),
+            "url": doc.get("url", ""),
+            "contents": doc.get("contents", ""),
+            "date": date_iso,
+            "date_text": date_text,
+        })
+    return jsonify({"items": items, "page": page, "limit": limit})
+
+
+@bp.get("/api/posts")
+def api_posts():
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    try:
+        limit = min(50, max(1, int(request.args.get("limit", 10))))
+    except ValueError:
+        limit = 10
+    exclude_ids_str = request.args.get("exclude", "")
+    filt = {}
+    if exclude_ids_str:
+        try:
+            exclude_ids = [ObjectId(id_str) for id_str in exclude_ids_str.split(',') if id_str]
+            if exclude_ids:
+                filt["_id"] = {"$nin": exclude_ids}
+        except Exception:
+            pass
+    sort_spec = [("created_at", -1), ("_id", -1)]
+    skip = (page - 1) * limit
+    cur = mongo._db["posts"].find(filt).sort(sort_spec).skip(skip).limit(limit)
+    items = []
+    kst = ZoneInfo("Asia/Seoul")
+    for doc in cur:
+        date_iso = None
+        date_text = None
+        dt = doc.get("created_at")
+        if isinstance(dt, datetime):
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            kst_dt = dt.astimezone(kst)
+            date_iso = kst_dt.isoformat()
+            date_text = kst_dt.strftime("%Y-%m-%d %H:%M")
+        items.append({
+            "id": str(doc.get("_id")),
+            "category": doc.get("category"),
+            "title": doc.get("title", ""),
+            "url": doc.get("url", ""),
+            "contents": doc.get("contents", ""),
+            "date": date_iso,
+            "date_text": date_text,
+            "meta": doc.get("meta", {}),
+        })
+    return jsonify({"items": items, "page": page, "limit": limit})
+
+
+@bp.get("/api/preview-url")
+def api_preview_url():
+    from metadata import fetch_and_extract_metadata, normalize_url
+    raw = request.args.get("url", "").strip()
+    if not raw:
+        return jsonify({"ok": False, "error": "empty"}), 400
+    url, err = normalize_url(raw)
+    if err:
+        return jsonify({"ok": False, "error": "invalid_url", "reason": err}), 200
+    meta = fetch_and_extract_metadata(url)
+    ok = bool((meta.title and meta.title.strip()) or (meta.description and meta.description.strip()) or (meta.image and meta.image.strip()))
+    ct = (meta.content_type or "").lower()
+    if "application/pdf" in ct or "application/octet-stream" in ct:
+        return jsonify({"ok": False, "error": "unsupported_content", "content_type": meta.content_type}), 200
+    return jsonify({
+        "ok": ok,
+        "title": meta.title,
+        "description": meta.description,
+        "image": meta.image,
+        "url": meta.url,
+        "content_type": meta.content_type,
+    }), 200
+
+
+@bp.post("/api/uploads/images")
+@jwt_required()
+def api_upload_image():
+    f = (request.files.get("image") or request.files.get("file"))
+    if not f:
+        return jsonify({"ok": False, "error": "no_file"}), 400
+    ct = (f.mimetype or "").lower()
+    if not ct.startswith("image/"):
+        return jsonify({"ok": False, "error": "bad_type"}), 400
+    max_size = 5 * 1024 * 1024
+    try:
+        clen = request.content_length or 0
+        if clen and clen > max_size + 1024:
+            return jsonify({"ok": False, "error": "too_large"}), 400
+    except Exception:
+        pass
+    now = datetime.now(timezone.utc)
+    yyyy = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y")
+    mm = now.astimezone(ZoneInfo("Asia/Seoul")).strftime("%m")
+    upload_dir = os.path.join(current_app.root_path, "static", "uploads", yyyy, mm)
+    os.makedirs(upload_dir, exist_ok=True)
+    orig = secure_filename(f.filename or "image")
+    base, ext = os.path.splitext(orig)
+    if not ext:
+        ext = ".png" if "/png" in ct else (".jpg" if "/jpeg" in ct else ".img")
+    fname = f"{uuid4().hex}{ext}"
+    abs_path = os.path.join(upload_dir, fname)
+    f.save(abs_path)
+    rel = f"uploads/{yyyy}/{mm}/{fname}"
+    from flask import url_for as _url_for
+    url = _url_for('static', filename=rel, _external=False)
+    return jsonify({"ok": True, "url": url}), 200
