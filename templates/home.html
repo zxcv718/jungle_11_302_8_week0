@@ -12,7 +12,7 @@
           <div id="carousel-slides" class="flex transition-transform duration-500 ease-in-out">
             {% for post in popular_posts %}
             <div class="w-full flex-shrink-0">
-              <a href="{{ url_for('post_detail', id=post.id) }}" class="block relative h-72 bg-gray-200 text-white">
+              <a href="{{ url_for('posts.post_detail', id=post.id) }}" class="block relative h-72 bg-gray-200 text-white">
                 {% if post.meta and post.meta.image %}
                 <img src="{{ post.meta.image }}" alt="{{ post.title }}" class="w-full h-full object-cover" />
                 {% endif %}
@@ -51,7 +51,7 @@
       <div class="mt-4 space-y-4 max-w-lg">
         {% if posts %}
           {% for post in posts %}
-            <a href="{{ url_for('post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
+            <a href="{{ url_for('posts.post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
               <div class="flex justify-between items-center text-sm text-gray-500 mb-1">
                 <span>{{ post.category or '' }} · {{ post.date_text or '' }}</span>
                 <span class="font-semibold text-emerald-600">추천 {{ post.like_count }}</span>
@@ -74,7 +74,7 @@
         <div class="space-y-4">
             {% if subscribed_posts %}
                 {% for post in subscribed_posts %}
-                    <a href="{{ url_for('post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
+                    <a href="{{ url_for('posts.post_detail', id=post.id) }}" class="block p-4 bg-white rounded border hover:bg-gray-50">
                       <div class="text-sm text-gray-500 mb-1">{{ post.date_text or '' }}</div>
                       <div class="font-semibold text-gray-900 line-clamp-1">{{ post.title or '' }}</div>
                     </a>
@@ -157,8 +157,8 @@
 
   // This utility function might be used elsewhere, so it's safer to keep it.
   async function fetchWithAutoRefresh(url, options={}) {
-    const loginUrl = "{{ url_for('login_get') }}";
-    const refreshUrl = "{{ url_for('refresh') }}";
+    const loginUrl = "{{ url_for('auth.login_get') }}";
+    const refreshUrl = "{{ url_for('auth.refresh') }}";
     const res = await fetch(url, { credentials: 'same-origin', ...options });
     if (res.status !== 401) return res;
     let err;

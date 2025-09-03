@@ -96,10 +96,10 @@
   </div>
 
   <div class="flex gap-2 mt-4">
-    <a href="{{ url_for('root') }}" class="px-3 py-2 bg-gray-200 text-gray-800 rounded text-sm">목록</a>
+    <a href="{{ url_for('home.root') }}" class="px-3 py-2 bg-gray-200 text-gray-800 rounded text-sm">목록</a>
     {% if current_user and current_user.id == post.author.id %}
-    <a href="{{ url_for('post_edit_get', id=post.id) }}" class="px-3 py-2 bg-blue-600 text-white rounded text-sm">수정</a>
-    <form action="{{ url_for('post_delete', id=post.id) }}" method="post" onsubmit="return confirm('삭제하시겠습니까?');">
+    <a href="{{ url_for('posts.post_edit_get', id=post.id) }}" class="px-3 py-2 bg-blue-600 text-white rounded text-sm">수정</a>
+    <form action="{{ url_for('posts.post_delete', id=post.id) }}" method="post" onsubmit="return confirm('삭제하시겠습니까?');">
       <button class="px-3 py-2 bg-red-600 text-white rounded text-sm">삭제</button>
     </form>
     {% endif %}
@@ -169,7 +169,7 @@
 const likeBtn = document.getElementById('likeBtn');
 if (likeBtn) {
   likeBtn.addEventListener('click', () => {
-    fetch("{{ url_for('post_like', id=post.id) }}", {
+    fetch("{{ url_for('posts.post_like', id=post.id) }}", {
       method: 'POST',
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
       credentials: 'same-origin'
@@ -195,7 +195,7 @@ if (likeBtn) {
 const subscribeBtn = document.getElementById('subscribeBtn');
 if (subscribeBtn) {
   subscribeBtn.addEventListener('click', () => {
-    fetch("{{ url_for('user_subscribe', id=post.author.id) }}", {
+    fetch("{{ url_for('posts.user_subscribe', id=post.author.id) }}", {
       method: 'POST',
       headers: { 'X-Requested-With': 'XMLHttpRequest' },
       credentials: 'same-origin'

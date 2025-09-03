@@ -2,26 +2,26 @@ from pymongo import MongoClient
 from pymongo.errors import ConfigurationError
 
 client = None
-_db = None
+db = None
 
 
 def init_mongo(app):
-    global client, _db
+    global client, db
     client = MongoClient(app.config["MONGO_URI"])  # SRV or standard URI
     try:
-        db = client.get_default_database()
+        _db_temp = client.get_default_database()
     except ConfigurationError:
-        db = None
-    _db = db if db is not None else client["login"]
+        _db_temp = None
+    db = _db_temp if _db_temp is not None else client["login"]
     # Expose collections on app.extensions for easy import until repos added
     app.extensions["mongo"] = {
         "client": client,
-        "db": _db,
-        "users": _db["users"],
-        "posts": _db["posts"],
-        "comments": _db["comments"],
-        "chat_rooms": _db["chat_rooms"],
-        "chat_messages": _db["chat_messages"],
+        "db": db,
+        "users": db["users"],
+        "posts": db["posts"],
+        "comments": db["comments"],
+        "chat_rooms": db["chat_rooms"],
+        "chat_messages": db["chat_messages"],
     }
     # Ensure indexes (best-effort)
     try:
