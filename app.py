@@ -47,7 +47,6 @@ if _db is None:
     _db = client["login"]
 users = _db["users"]
 posts = _db["posts"]
-<<<<<<< HEAD
 comments = _db["comments"]
 try:
     users.create_index("email", unique=True)
@@ -56,8 +55,7 @@ try:
 except Exception as e:
     # Avoid crashing on startup if DB requires auth. Handlers will still fail until MONGO_URI is correct.
     print("[warn] Could not ensure indexes:", e)
-=======
-chat_rooms = _db["chat_rooms"]
+    chat_rooms = _db["chat_rooms"]
 chat_messages = _db["chat_messages"]
 if os.getenv("SKIP_INDEX", "0") != "1":
     try:
@@ -69,7 +67,6 @@ if os.getenv("SKIP_INDEX", "0") != "1":
     except Exception as e:
         # Avoid crashing on startup if DB requires auth. Handlers will still fail until MONGO_URI is correct.
         print("[warn] Could not ensure indexes:", e)
->>>>>>> 3914eea (feat: 채팅 기능 구현)
 
 @app.get("/")
 def root():
