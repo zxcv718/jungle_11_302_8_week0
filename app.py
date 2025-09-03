@@ -3,7 +3,8 @@ from zoneinfo import ZoneInfo
 import os
 
 from dotenv import load_dotenv
-from flask import Flask, flash, make_response, redirect, render_template, request, url_for, jsonify, abort
+from flask_socketio import SocketIO, join_room, leave_room, emit
+from flask import Flask, flash, make_response, redirect, render_template, request, url_for, jsonify, abort, render_template_string
 from flask_jwt_extended import (
     JWTManager,
     create_access_token,
@@ -28,6 +29,8 @@ app = Flask(__name__)
 app.config.from_object("config.Config")
 
 jwt = JWTManager(app)
+# SocketIO setup (threading async for simplicity). In production, consider eventlet/gevent.
+socketio = SocketIO(app, cors_allowed_origins=None, async_mode="threading", logger=True, engineio_logger=True)
 @app.after_request
 def add_no_cache_headers(response):
     # Prevent caching to avoid back navigation showing protected content after logout
@@ -45,6 +48,8 @@ if _db is None:
 users = _db["users"]
 posts = _db["posts"]
 comments = _db["comments"]
+chat_rooms = _db["chat_rooms"]
+chat_messages = _db["chat_messages"]
 try:
     users.create_index("email", unique=True)
     posts.create_index([("user_id", 1), ("created_at", -1)])
@@ -52,6 +57,16 @@ try:
 except Exception as e:
     # Avoid crashing on startup if DB requires auth. Handlers will still fail until MONGO_URI is correct.
     print("[warn] Could not ensure indexes:", e)
+if os.getenv("SKIP_INDEX", "0") != "1":
+    try:
+        users.create_index("email", unique=True)
+        posts.create_index([("user_id", 1), ("created_at", -1)])
+        posts.create_index([("title", "text"), ("contents", "text")])
+        chat_rooms.create_index([("category", 1), ("name", 1)])
+        chat_messages.create_index([("room_id", 1), ("created_at", -1)])
+    except Exception as e:
+        # Avoid crashing on startup if DB requires auth. Handlers will still fail until MONGO_URI is correct.
+        print("[warn] Could not ensure indexes:", e)
 
 @app.get("/")
 def root():
@@ -185,6 +200,280 @@ def dashboard():
     email = jwt_data.get("email")
     name = jwt_data.get("name")
     return render_template("dashboard.html", title="대시보드", name=name, email=email, identity=identity, hide_top_nav=True)
+
+
+# ---- Chat: views & APIs ----
+
+def get_categories():
+    return ["사회","경제","과학","문화","기술","환경","스포츠","생활","역사","철학","기타"]
+
+
+@app.get("/chat")
+@jwt_required()
+def chat_home():
+    return render_template("chat_home.html", title="카테고리 채팅", hide_top_nav=True)
+
+
+@app.get("/chat/<category>")
+@jwt_required()
+def chat_category(category):
+    if category not in get_categories():
+        abort(404)
+    print(f"[http] chat_category category={category}")
+    return render_template("chat_category.html", title=f"{category} 채팅", category=category, hide_top_nav=True)
+
+
+@app.get("/chat/<category>/<room_id>")
+@jwt_required()
+def chat_room(category, room_id):
+    if category not in get_categories():
+        abort(404)
+    room = chat_rooms.find_one({"_id": ObjectId(room_id), "category": category})
+    if not room:
+        abort(404)
+    print(f"[http] chat_room category={category} room_id={room_id}")
+    ident = get_jwt_identity()
+    user = users.find_one({"_id": ObjectId(ident)})
+    name = user.get("name") if user else "익명"
+    return render_template(
+        "chat_room.html",
+        title=f"{room.get('name')} - {category}",
+        category=category,
+        room={"id": room_id, "name": room.get("name")},
+        me_name=name,
+        me_id=str(ident),
+        hide_top_nav=True,
+    )
+
+
+@app.get("/api/chat/<category>/rooms")
+@jwt_required()
+def api_list_rooms(category):
+    if category not in get_categories():
+        return jsonify({"rooms": []}), 200
+    cur = chat_rooms.find({"category": category}).sort([("_id", -1)])
+    # Attach online peer counts from memory
+    out = []
+    for doc in cur:
+        rid = str(doc.get("_id"))
+        out.append({"id": rid, "name": doc.get("name", ""), "peers": online_counts.get(rid, 0)})
+    print(f"[api] list_rooms category={category} count={len(out)}")
+    return jsonify({"rooms": out}), 200
+
+
+@app.post("/api/chat/<category>/rooms")
+@jwt_required()
+def api_create_room(category):
+    if category not in get_categories():
+        return jsonify({"error": "bad_category"}), 400
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name_required"}), 400
+    doc = {"category": category, "name": name, "created_at": datetime.now(timezone.utc)}
+    res = chat_rooms.insert_one(doc)
+    return jsonify({"id": str(res.inserted_id)}), 200
+
+
+@app.get("/api/chat/<category>/<room_id>/messages")
+@jwt_required()
+def api_room_messages(category, room_id):
+    if category not in get_categories():
+        return jsonify({"messages": []}), 200
+    try:
+        rid = ObjectId(room_id)
+    except Exception:
+        return jsonify({"messages": []}), 200
+    try:
+        limit = min(200, max(1, int(request.args.get("limit", 50))))
+    except ValueError:
+        limit = 50
+    cur = chat_messages.find({"room_id": rid}).sort([("created_at", -1)]).limit(limit)
+    items = []
+    for m in cur:
+        items.append({
+            "id": str(m.get("_id")),
+            "user_id": str(m.get("user_id")) if m.get("user_id") else None,
+            "name": m.get("name"),
+            "text": m.get("text"),
+            "ts": (m.get("created_at") or datetime.now(timezone.utc)).isoformat(),
+        })
+    items.reverse()
+    print(f"[api] messages category={category} room_id={room_id} returned={len(items)}")
+    return jsonify({"messages": items}), 200
+
+
+@app.get("/api/chat/<category>/<room_id>/peers")
+@jwt_required()
+def api_room_peers(category, room_id):
+    try:
+        _ = ObjectId(room_id)
+    except Exception:
+        return jsonify({"peers": 0}), 200
+    peers = online_counts.get(room_id, 0)
+    print(f"[api] peers category={category} room_id={room_id} peers={peers}")
+    return jsonify({"peers": peers}), 200
+
+
+@app.post("/api/chat/<category>/<room_id>/send")
+@jwt_required()
+def api_send_message(category, room_id):
+    if category not in get_categories():
+        return jsonify({"error": "bad_category"}), 400
+    try:
+        rid_obj = ObjectId(room_id)
+    except Exception:
+        return jsonify({"error": "bad_room"}), 400
+    if not chat_rooms.find_one({"_id": rid_obj, "category": category}):
+        return jsonify({"error": "not_found"}), 404
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    cid = (data.get("cid") or "").strip() or None
+    if not text:
+        return jsonify({"error": "text_required"}), 400
+    uid = ObjectId(get_jwt_identity())
+    j = get_jwt()
+    name = j.get("name") or "익명"
+    created = datetime.now(timezone.utc)
+    doc = {"room_id": rid_obj, "user_id": uid, "name": name, "text": text, "created_at": created}
+    try:
+        res = chat_messages.insert_one(doc)
+        mid = str(res.inserted_id)
+    except Exception as e:
+        print("[api] message insert failed:", e)
+        mid = None
+    # Broadcast if any listeners via Socket.IO
+    try:
+        socketio.emit("new_message", {
+            "id": mid or "temp-" + str(int(created.timestamp()*1000)),
+            "room_id": room_id,
+            "user_id": str(uid),
+            "name": name,
+            "text": text,
+            "ts": created.isoformat(),
+            "cid": cid,
+        }, to=room_id)
+    except Exception as e:
+        print("[api] broadcast failed:", e)
+    print(f"[api] send category={category} room_id={room_id} by={str(uid)} mid={mid} cid={cid}")
+    return jsonify({"id": mid, "ts": created.isoformat(), "name": name, "text": text, "cid": cid, "user_id": str(uid)}), 200
+
+
+# In-memory online counters (best-effort)
+online_counts = {}
+sid_rooms = {}
+
+
+@socketio.on("connect")
+def ws_connect():
+    # Enforce JWT via cookies for websocket handshake
+    try:
+        verify_jwt_in_request(optional=False)
+        uid = get_jwt_identity()
+        origin = request.headers.get('Origin')
+        ua = request.headers.get('User-Agent')
+        ck = list(request.cookies.keys()) if request.cookies else []
+        print(f"[ws] connect ok sid={request.sid} uid={uid} origin={origin} ua={(ua or '')[:80]} cookies={ck}")
+    except Exception as e:
+        print("[ws] connect denied:", e)
+        return False
+    # OK
+    sid_rooms[request.sid] = set()
+
+
+@socketio.on("disconnect")
+def ws_disconnect():
+    rooms = sid_rooms.pop(request.sid, set())
+    print(f"[ws] disconnect sid={request.sid} rooms={list(rooms)}")
+    for rid in rooms:
+        online_counts[rid] = max(0, online_counts.get(rid, 1) - 1)
+        emit("room_peers", {"room_id": rid, "peers": online_counts.get(rid, 0)}, to=rid)
+
+
+@socketio.on("join")
+def ws_join(data):
+    try:
+        verify_jwt_in_request(optional=False)
+    except Exception:
+        return
+    rid = (data or {}).get("room_id")
+    if not rid:
+        return
+    # verify room exists
+    try:
+        room_doc = chat_rooms.find_one({"_id": ObjectId(rid)})
+    except Exception:
+        room_doc = None
+    if not room_doc:
+        return
+    print(f"[ws] join sid={request.sid} room={rid}")
+    join_room(rid)
+    sid_rooms.setdefault(request.sid, set()).add(rid)
+    online_counts[rid] = online_counts.get(rid, 0) + 1
+    emit("room_peers", {"room_id": rid, "peers": online_counts[rid]}, to=rid)
+    emit("joined", {"room_id": rid, "peers": online_counts[rid]}, to=request.sid)
+
+
+@socketio.on("leave")
+def ws_leave(data):
+    rid = (data or {}).get("room_id")
+    if not rid:
+        return
+    print(f"[ws] leave sid={request.sid} room={rid}")
+    leave_room(rid)
+    if request.sid in sid_rooms and rid in sid_rooms[request.sid]:
+        sid_rooms[request.sid].remove(rid)
+        online_counts[rid] = max(0, online_counts.get(rid, 1) - 1)
+        emit("room_peers", {"room_id": rid, "peers": online_counts.get(rid, 0)}, to=rid)
+
+
+@socketio.on("send_message")
+def ws_send_message(data):
+    try:
+        verify_jwt_in_request(optional=False)
+    except Exception:
+        return
+    rid = (data or {}).get("room_id")
+    text = (data or {}).get("text", "").strip()
+    cid = (data or {}).get("cid") or None
+    if not rid or not text:
+        return
+    # Verify room
+    try:
+        rid_obj = ObjectId(rid)
+    except Exception:
+        return
+    if not chat_rooms.find_one({"_id": rid_obj}):
+        return
+    uid = ObjectId(get_jwt_identity())
+    j = get_jwt()
+    name = j.get("name") or "익명"
+    created = datetime.now(timezone.utc)
+    doc = {
+        "room_id": rid_obj,
+        "user_id": uid,
+        "name": name,
+        "text": text,
+        "created_at": created,
+    }
+    try:
+        res = chat_messages.insert_one(doc)
+        mid = str(res.inserted_id)
+    except Exception as e:
+        print("[ws] message insert failed:", e)
+        mid = None
+    payload = {
+        "id": mid or "temp-" + str(int(created.timestamp()*1000)),
+        "room_id": rid,
+        "user_id": str(uid),
+        "name": name,
+        "text": text,
+        "ts": created.isoformat(),
+        "cid": cid,
+    }
+    print(f"[ws] new_message room={rid} by={str(uid)} id={payload['id']} cid={cid}")
+    emit("new_message", payload, to=rid)
+    emit("send_ack", {"id": payload["id"]}, to=request.sid)
 
 
 @app.get("/api/my-posts")
@@ -400,7 +689,11 @@ def post_detail(id):
             "user_name": user["name"] if user else "알 수 없음",
             "content": c["content"],
             "created_at": created_at_kst,
+            "like_count": len(c.get("likes", [])),
         })
+    # 댓글 리스트 생성 완료 후, 추천수 기준 상위 3개 추출 (추천수 1 이상만)
+    best_comments = [c for c in comment_list if c["like_count"] > 0]
+    best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
     return render_template(
         "post_detail.html",
         title="글 상세",
@@ -416,6 +709,7 @@ def post_detail(id):
         hide_top_nav=True,
         current_user=current_user,
         comments=comment_list,
+        best_comments=best_comments,
     )
 
 
@@ -507,40 +801,255 @@ def post_edit_post(id):
 @app.post("/post/<id>/comments")
 @jwt_required()
 def post_comments(id):
-    content = request.form.get("content", "").strip()
-    if not content:
-        flash("댓글 내용을 입력하세요.", "error")
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    try:
+        post_id = ObjectId(id)
+        user_id = ObjectId(get_jwt_identity())
+        content = request.form.get("content", "").strip()
+        if not content:
+            msg = "댓글 내용을 입력하세요."
+            if is_ajax:
+                return jsonify({"ok": False, "message": msg}), 400
+            flash(msg, "error")
+            return redirect(url_for("post_detail", id=id))
+        now = datetime.now(timezone.utc)
+        comment_doc = {
+            "post_id": post_id,
+            "user_id": user_id,
+            "content": content,
+            "created_at": now,
+            "likes": []
+        }
+        inserted = comments.insert_one(comment_doc)
+        # 새 댓글 정보
+        user = users.find_one({"_id": user_id})
+        kst = ZoneInfo("Asia/Seoul")
+        created_at_kst = now.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+        comment_data = {
+            "id": str(inserted.inserted_id),
+            "user_id": str(user_id),
+            "user_name": user["name"] if user else "알 수 없음",
+            "content": content,
+            "created_at": created_at_kst,
+            "like_count": 0
+        }
+        # 댓글 HTML (SSR 스타일)
+        comment_html = render_template_string(
+            '<div class="border rounded px-3 py-2 bg-white flex justify-between items-center">'
+            '  <div>'
+            '    <span class="font-semibold">{{ c.user_name }}</span>'
+            '    <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>'
+            '    <div class="mt-1">{{ c.content }}</div>'
+            '    <button type="button" class="text-emerald-600 text-xs px-2 py-1 rounded border" data-cid="{{ c.id }}" onclick="likeComment(this.dataset.cid, this)">추천</button>'
+            '    <span class="ml-1 text-xs text-gray-700" id="like-count-{{ c.id }}">0</span>'
+            '  </div>'
+            '  <form action="' + url_for('comment_delete', comment_id=comment_data["id"]) + '" method="post" onsubmit="return confirm(\'댓글을 삭제하시겠습니까?\');">'
+            '    <button class="text-red-600 text-xs px-2 py-1 rounded">삭제</button>'
+            '  </form>'
+            '</div>',
+            c=comment_data
+        )
+        # 베스트 댓글 영역 갱신
+        all_comments = list(comments.find({"post_id": post_id}))
+        comment_list = []
+        for c in all_comments:
+            user = users.find_one({"_id": c["user_id"]})
+            dt = c["created_at"]
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            created_at_kst = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+            comment_list.append({
+                "id": str(c["_id"]),
+                "user_id": str(c["user_id"]),
+                "user_name": user["name"] if user else "알 수 없음",
+                "content": c["content"],
+                "created_at": created_at_kst,
+                "like_count": len(c.get("likes", [])),
+            })
+        best_comments = [c for c in comment_list if c["like_count"] > 0]
+        best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+        best_comments_html = render_template_string(
+            '{% if best_comments and best_comments|length > 0 %}'
+            '<div class="mb-6">'
+            '  <h2 class="text-lg font-bold text-emerald-700 mb-2">베스트 댓글</h2>'
+            '  <div class="space-y-2">'
+            '    {% for c in best_comments %}'
+            '    <div class="border rounded px-3 py-2 bg-yellow-50 flex justify-between items-center">'
+            '      <div>'
+            '        <span class="font-semibold">{{ c.user_name }}</span>'
+            '        <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>'
+            '        <div class="mt-1">{{ c.content }}</div>'
+            '      </div>'
+            '      <span class="text-emerald-600 font-bold text-sm">추천 수 {{ c.like_count }}</span>'
+            '    </div>'
+            '    {% endfor %}'
+            '  </div>'
+            '</div>'
+            '{% endif %}',
+            best_comments=best_comments
+        )
+        if is_ajax:
+            return jsonify({"ok": True, "comment_html": comment_html, "best_comments_html": best_comments_html})
+        flash("댓글이 등록되었습니다.", "success")
         return redirect(url_for("post_detail", id=id))
-    # DB에 댓글 저장 로직 추가
-    comments.insert_one({
-        "post_id" : ObjectId(id),
-        "user_id" : ObjectId(get_jwt_identity()),
-        "content": content,
-        "created_at" : datetime.now(timezone.utc)
-    })
-    flash("댓글이 등록되었습니다.", "success")
-    return redirect(url_for("post_detail", id=id))
+    except Exception as e:
+        if is_ajax:
+            return jsonify({"ok": False, "message": "오류: " + str(e)}), 400
+        flash("오류가 발생했습니다.", "error")
+        return redirect(url_for("post_detail", id=id))
 
 # 댓글 삭제
 @app.post("/delete/<comment_id>/comment")
 @jwt_required()
 def comment_delete(comment_id):
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     try:
         cid = ObjectId(comment_id)
-    except Exception:
-        abort(404)
-    uid = ObjectId(get_jwt_identity())
-    # 삭제 전에 post_id를 미리 조회
-    comment = comments.find_one({"_id": cid, "user_id": uid})
-    post_id = comment.get("post_id") if comment else None
-    res = comments.delete_one({"_id": cid, "user_id": uid})
-    if res.deleted_count:
-        flash("댓글이 삭제되었습니다.", "success")
-    else:
-        flash("삭제할 수 없습니다.", "error")
-    if post_id:
-        return redirect(url_for("post_detail", id=str(post_id)))
-    return redirect(url_for("dashboard"))
+        uid = ObjectId(get_jwt_identity())
+        # 삭제 전에 post_id를 미리 조회
+        comment = comments.find_one({"_id": cid, "user_id": uid})
+        post_id = comment.get("post_id") if comment else None
+        res = comments.delete_one({"_id": cid, "user_id": uid})
+        if res.deleted_count:
+            msg = "댓글이 삭제되었습니다."
+            # AJAX: 삭제된 댓글 id, 베스트 댓글 영역 반환
+            if is_ajax and post_id:
+                # 베스트 댓글 영역 갱신
+                all_comments = list(comments.find({"post_id": post_id}))
+                comment_list = []
+                kst = ZoneInfo("Asia/Seoul")
+                for c in all_comments:
+                    user = users.find_one({"_id": c["user_id"]})
+                    dt = c["created_at"]
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    created_at_kst = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+                    comment_list.append({
+                        "id": str(c["_id"]),
+                        "user_id": str(c["user_id"]),
+                        "user_name": user["name"] if user else "알 수 없음",
+                        "content": c["content"],
+                        "created_at": created_at_kst,
+                        "like_count": len(c.get("likes", [])),
+                    })
+                best_comments = [c for c in comment_list if c["like_count"] > 0]
+                best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+                best_comments_html = render_template_string(
+                    '{% if best_comments and best_comments|length > 0 %}'
+                    '<div class="mb-6">'
+                    '  <h2 class="text-lg font-bold text-emerald-700 mb-2">베스트 댓글</h2>'
+                    '  <div class="space-y-2">'
+                    '    {% for c in best_comments %}'
+                    '    <div class="border rounded px-3 py-2 bg-yellow-50 flex justify-between items-center">'
+                    '      <div>'
+                    '        <span class="font-semibold">{{ c.user_name }}</span>'
+                    '        <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>'
+                    '        <div class="mt-1">{{ c.content }}</div>'
+                    '      </div>'
+                    '      <span class="text-emerald-600 font-bold text-sm">추천 수 {{ c.like_count }}</span>'
+                    '    </div>'
+                    '    {% endfor %}'
+                    '  </div>'
+                    '</div>'
+                    '{% endif %}',
+                    best_comments=best_comments
+                )
+                return jsonify({"ok": True, "comment_id": str(comment_id), "best_comments_html": best_comments_html, "message": msg})
+            flash(msg, "success")
+        else:
+            msg = "삭제할 수 없습니다."
+            if is_ajax:
+                return jsonify({"ok": False, "message": msg}), 400
+            flash(msg, "error")
+        if post_id:
+            return redirect(url_for("post_detail", id=str(post_id)))
+        return redirect(url_for("dashboard"))
+    except Exception as e:
+        if is_ajax:
+            return jsonify({"ok": False, "message": "오류: " + str(e)}), 400
+        flash("오류가 발생했습니다.", "error")
+        return redirect(url_for("dashboard"))
+
+#댓글 추천
+@app.post("/like/<comment_id>/comment")
+@jwt_required()
+def comment_like(comment_id):
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    try:
+        cid = ObjectId(comment_id)
+        uid = ObjectId(get_jwt_identity())
+        comment = comments.find_one({"_id": cid})
+        if not comment:
+            msg = "이미 삭제된 댓글입니다."
+            if is_ajax:
+                return jsonify({"ok": False, "message": msg}), 404
+            flash(msg, "error")
+            return redirect(url_for("dashboard"))
+        post_id = comment.get("post_id")
+        likes = comment.get("likes", [])
+        if isinstance(likes, int):
+            likes = []
+        if uid in likes:
+            comments.update_one({"_id": cid}, {"$pull": {"likes": uid}})
+            msg = "댓글 추천을 취소했습니다."
+        else:
+            comments.update_one({"_id": cid}, {"$push": {"likes": uid}})
+            msg = "댓글을 추천했습니다."
+        new_comment = comments.find_one({"_id": cid})
+        like_count = len(new_comment.get("likes", [])) if new_comment else 0
+        if is_ajax:
+            # --- 베스트 댓글 영역 동적 렌더링 ---
+            # 해당 포스트의 전체 댓글을 조회
+            all_comments = list(comments.find({"post_id": post_id}))
+            comment_list = []
+            kst = ZoneInfo("Asia/Seoul")
+            for c in all_comments:
+                user = users.find_one({"_id": c["user_id"]})
+                dt = c["created_at"]
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                created_at_kst = dt.astimezone(kst).strftime("%Y-%m-%d %H:%M")
+                comment_list.append({
+                    "id": str(c["_id"]),
+                    "user_id": str(c["user_id"]),
+                    "user_name": user["name"] if user else "알 수 없음",
+                    "content": c["content"],
+                    "created_at": created_at_kst,
+                    "like_count": len(c.get("likes", [])),
+                })
+            best_comments = [c for c in comment_list if c["like_count"] > 0]
+            best_comments = sorted(best_comments, key=lambda x: x["like_count"], reverse=True)[:3]
+            # 베스트 댓글 영역만 렌더링 (템플릿 조각)
+            best_comments_html = render_template_string(
+                '{% if best_comments and best_comments|length > 0 %}'
+                '<div class="mb-6">'
+                '  <h2 class="text-lg font-bold text-emerald-700 mb-2">베스트 댓글</h2>'
+                '  <div class="space-y-2">'
+                '    {% for c in best_comments %}'
+                '    <div class="border rounded px-3 py-2 bg-yellow-50 flex justify-between items-center">'
+                '      <div>'
+                '        <span class="font-semibold">{{ c.user_name }}</span>'
+                '        <span class="text-xs text-gray-500 ml-2">{{ c.created_at }}</span>'
+                '        <div class="mt-1">{{ c.content }}</div>'
+                '      </div>'
+                '      <span class="text-emerald-600 font-bold text-sm">추천 수 {{ c.like_count }}</span>'
+                '    </div>'
+                '    {% endfor %}'
+                '  </div>'
+                '</div>'
+                '{% endif %}',
+                best_comments=best_comments
+            )
+            return jsonify({"ok": True, "like_count": like_count, "message": msg, "best_comments_html": best_comments_html})
+        flash(msg, "success")
+        if post_id:
+            return redirect(url_for("post_detail", id=str(post_id)))
+        return redirect(url_for("dashboard"))
+    except Exception as e:
+        if is_ajax:
+            return jsonify({"ok": False, "message": "오류: " + str(e)}), 400
+        flash("오류가 발생했습니다.", "error")
+        return redirect(url_for("dashboard"))
 
 @app.get("/api/preview-url")
 #@jwt_required()
@@ -683,4 +1192,5 @@ def api_session_status():
 if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "5050"))
-    app.run(host=host, port=port, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
+    # app.run(host=host, port=port, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
+    socketio.run(app, host=host, port=port, debug=bool(int(os.getenv("FLASK_DEBUG", "1"))))
