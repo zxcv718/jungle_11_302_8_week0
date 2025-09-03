@@ -90,8 +90,8 @@
     if (!text) return;
     try {
       if (socket && socket.connected) {
-        console.log('[chat] emit send_message');
-        socket.emit('send_message', { room_id: roomId, text, cid: genCid() });
+  console.log('[chat] emit send_message');
+  socket.emit('send_message', { room_id: roomId, text, cid: genCid(), me_id: meId, me_name: meName });
       } else {
         console.log('[chat] http fallback send');
         const cid = genCid();
@@ -159,8 +159,10 @@
           socket.__joinedRooms.add(roomId);
         }
       });
-      socket.on('connect_error', (err) => {
+      socket.on('connect_error', async (err) => {
         console.warn('[chat] socket connect_error', err);
+        try { await ensureAccess(); } catch {}
+        try { if (!socket.connected) setTimeout(() => socket.connect(), 300); } catch {}
       });
       socket.on('room_peers', ({room_id, peers}) => { if (room_id===roomId) { console.log('[chat] room_peers', peers); peerEl.textContent = peers; } });
       socket.on('joined', ({room_id, peers}) => { if (room_id===roomId) { console.log('[chat] joined ack', peers); peerEl.textContent = peers; } });
