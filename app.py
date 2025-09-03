@@ -117,9 +117,15 @@ def root():
             "like_count": {"$size": {"$ifNull": ["$likes", []]}}
         }},
         {"$sort": {"like_count": -1, "created_at": -1}},
-        {"$limit": 5} # 전체 글 목록을 10개로 제한
+        {"$limit": 10} # 전체 글 목록을 10개로 제한
     ]
-    all_posts = [process_post_doc(doc) for doc in posts.aggregate(pipeline_all)]
+    sorted_posts = [process_post_doc(doc) for doc in posts.aggregate(pipeline_all)]
+
+    # 캐러셀을 위한 인기글 Top 5
+    popular_posts = sorted_posts[:5]
+
+    # 전체 글 목록 (Top 5 제외)
+    all_posts = sorted_posts[5:]
 
     # 구독한 저자 글 (로그인 시)
     subscribed_posts = []
@@ -137,10 +143,6 @@ def root():
             ]
             subscribed_posts = [process_post_doc(doc) for doc in posts.aggregate(sub_pipeline)]
 
-    # 캐러셀을 위한 인기글 Top 5
-    # all_posts가 이미 추천순으로 정렬되어 있으므로, 앞에서 5개만 잘라서 사용
-    popular_posts = all_posts[:5]
-
     # 인기글에 대한 메타데이터(이미지)를 가져와 채워줍니다.
     for post in popular_posts:
         if post.get("url"):
@@ -151,7 +153,7 @@ def root():
 
     return render_template(
         "home.html", 
-        posts=all_posts,  # 전체 글 목록 (추천순 정렬)
+        posts=all_posts,  # 전체 글 목록 (Top 5 제외)
         subscribed_posts=subscribed_posts, # 구독 글 목록
         popular_posts=popular_posts, # 인기글 Top 5
         user_info=user_info
