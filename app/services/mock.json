@@ -1,0 +1,67 @@
+[
+  {
+    "_id": { "$oid": "66f00aaa1111111111111111" },
+    "category": "알고리즘",
+    "contents": "다익스트라 알고리즘 개념과 우선순위 큐 기반 구현 요약. 예제 그래프와 복잡도 분석 포함.",
+    "created_at": { "$date": "2025-09-04T09:12:00Z" },
+    "likes": [
+      { "$oid": "68b8a881ba262c9af0da3259" },
+      { "$oid": "68b7f937895fb378cb71da82" }
+    ],
+    "title": "다익스트라 알고리즘: 우선순위 큐로 최단경로",
+    "url": "https://cp-algorithms.com/graph/dijkstra.html",
+    "user_id": { "$oid": "68b6d687d153fa299cb932d0" },
+    "views": 120
+  },
+  {
+    "_id": { "$oid": "66f00aaa2222222222222222" },
+    "category": "데이터베이스",
+    "contents": "MongoDB 인덱스 종류, 복합 인덱스 설계, 카디널리티/선두 필드 규칙 정리.",
+    "created_at": { "$date": "2025-09-03T20:45:00Z" },
+    "likes": [
+      { "$oid": "68b6d687d153fa299cb932d0" }
+    ],
+    "title": "MongoDB 인덱스 설계 가이드",
+    "url": "https://www.mongodb.com/docs/manual/indexes/",
+    "user_id": { "$oid": "68b8a881ba262c9af0da3259" },
+    "views": 85
+  },
+  {
+    "_id": { "$oid": "66f00aaa3333333333333333" },
+    "category": "운영체제",
+    "contents": "프로세스 vs 스레드 차이, 컨텍스트 스위칭, 동시성 이슈 간단 정리.",
+    "created_at": { "$date": "2025-09-02T14:30:00Z" },
+    "likes": [
+      { "$oid": "68b6d687d153fa299cb932d0" },
+      { "$oid": "68b8a881ba262c9af0da3259" }
+    ],
+    "title": "프로세스와 스레드의 차이 정리",
+    "url": "https://learn.microsoft.com/en-us/windows/win32/procthread/processes-and-threads",
+    "user_id": { "$oid": "68b7f937895fb378cb71da82" },
+    "views": 230
+  },
+  {
+    "_id": { "$oid": "66f00aaa4444444444444444" },
+    "category": "네트워크",
+    "contents": "TCP 3-way 핸드셰이크 절차(SYN, SYN-ACK, ACK)와 연결 설정 흐름도.",
+    "created_at": { "$date": "2025-09-01T16:10:00Z" },
+    "likes": [],
+    "title": "TCP 3-way 핸드셰이크 이해",
+    "url": "https://www.cloudflare.com/learning/ddos/glossary/tcp-handshake/",
+    "user_id": { "$oid": "68b6d687d153fa299cb932d0" },
+    "views": 45
+  },
+  {
+    "_id": { "$oid": "66f00aaa5555555555555555" },
+    "category": "시스템프로그래밍",
+    "contents": "fork()로 프로세스 복제, exec()로 새 프로그램 로드하는 기본 예제.",
+    "created_at": { "$date": "2025-08-31T11:05:00Z" },
+    "likes": [
+      { "$oid": "68b7f937895fb378cb71da82" }
+    ],
+    "title": "fork()와 exec() 기본 동작",
+    "url": "https://www.geeksforgeeks.org/fork-system-call/",
+    "user_id": { "$oid": "68b8a881ba262c9af0da3259" },
+    "views": 60
+  }
+]

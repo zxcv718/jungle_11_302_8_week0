@@ -1,5 +1,4 @@
 from flask import Flask, request
-import shutil
 import os
 from .extensions.socketio import socketio
 from .extensions.jwt import jwt
@@ -27,26 +26,6 @@ def create_app(config_object: str = "config.Config") -> Flask:
     socketio.init_app(app, cors_allowed_origins=None, async_mode="threading", logger=False, engineio_logger=False)
     init_mongo(app)
     mail.init_app(app)
-
-    # Best-effort migration: move legacy uploads from app/static/uploads to the configured static/uploads
-    try:
-        src_uploads = os.path.join(os.path.dirname(__file__), "static", "uploads")
-        dst_uploads = os.path.join(app.static_folder, "uploads")
-        if os.path.isdir(src_uploads):
-            for root, _, files in os.walk(src_uploads):
-                rel = os.path.relpath(root, src_uploads)
-                target_dir = os.path.join(dst_uploads, rel) if rel != "." else dst_uploads
-                os.makedirs(target_dir, exist_ok=True)
-                for f in files:
-                    s = os.path.join(root, f)
-                    d = os.path.join(target_dir, f)
-                    if not os.path.exists(d):
-                        try:
-                            shutil.move(s, d)
-                        except Exception:
-                            pass
-    except Exception:
-        pass
 
     # Blueprints
     app.register_blueprint(home_bp)

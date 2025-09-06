@@ -37,12 +37,6 @@ def init_mongo(app):
             _db["notifications"].create_index([("user_id", 1), ("read", 1), ("_id", -1)])
         except Exception:
             pass
-        # metadata cache: frequent lookups by URL
-        try:
-            _db["metadata_cache"].create_index("url", unique=True)
-            _db["metadata_cache"].create_index("fetched_at")
-        except Exception:
-            pass
     except Exception:
         # Don’t crash if index creation fails (e.g., permissions)
         pass

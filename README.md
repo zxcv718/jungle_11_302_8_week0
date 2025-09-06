@@ -10,7 +10,11 @@ Requirements:
 
 1. Create and fill `.env` (copy from `.env.example`).
 2. Install Python packages.
-3. Run the app and open http://127.0.0.1:5050
+3. Run the app and open http://127.0.0.1:5050 (local)
+
+If deployed to your EC2 instance, open:
+
+- http://43.200.183.193:5050
 
 ### Quickstart
 

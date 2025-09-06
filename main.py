@@ -19,7 +19,7 @@ def run():
         # Keep static cached as in original
         return response
 
-    host = os.getenv("HOST", "127.0.0.1")
+    host = os.getenv("HOST", "43.200.183.193")
     port = int(os.getenv("PORT", "5050"))
     # Keep debug off in runner to avoid auto-reloader overhead in dev when performance matters
     debug = bool(int(os.getenv("FLASK_DEBUG", "1")))
